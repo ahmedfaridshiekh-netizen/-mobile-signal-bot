@@ -34,7 +34,7 @@ export default {
       return new Response(JSON.stringify({
         name: "Mobile Signal Bot V1",
         status: "online",
-        message:message: "Scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
+        message:"Scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
         watchlist: { crypto: CRYPTO_BASES, commodities: COMMODITIES.map(x => x.label) }
       }, null, 2), { headers: { "content-type": "application/json" }});
     }
@@ -323,20 +323,27 @@ function atr(c, n) {
   return sma(tr, n);
 }
 
-async function sendTelegram(env, text) {
-  const token = env.TELEGRAM_BOT_TOKEN;
-  const chatId = env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) throw new Error("Telegram secrets are not configured");
-  const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+async function sendNtfy(env, text) {
+  const topic = env.NTFY_TOPIC;
+
+  if (!topic) {
+    throw new Error("NTFY_TOPIC is not configured");
+  }
+
+  const r = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true
-    })
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "Title": "Mobile Signal Bot V1",
+      "Priority": "high",
+      "Tags": "chart_with_upwards_trend"
+    },
+    body: text
   });
-  if (!r.ok) throw new Error(`Telegram HTTP ${r.status}`);
+
+  if (!r.ok) {
+    throw new Error(`ntfy HTTP ${r.status}`);
+  }
 }
 
 function formatAlert(s) {
