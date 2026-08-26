@@ -347,9 +347,14 @@ async function sendNtfy(env, text) {
   });
 
   if (!r.ok) {
-    throw new Error(`ntfy HTTP ${r.status}`);
-  }
+  const body = await r.text().catch(() => "");
+  console.error(`ntfy HTTP ${r.status}`, body);
+  return false;
 }
+
+return true;
+  }
+
 
 function formatAlert(s) {
   const f = n => n == null ? "—" : Number(n).toPrecision(8);
