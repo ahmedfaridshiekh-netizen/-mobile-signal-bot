@@ -120,7 +120,7 @@ async function runScan(env) {
 
     // Only alert on a new direction. If the same direction persists, stay silent.
     if (previous !== s.signal) {
-      await sendTelegram(env, formatAlert(s));
+      await sendNtfy(env, formatAlert(s));
       if (env.SIGNAL_STATE) await env.SIGNAL_STATE.put(key, s.signal);
       sent.push(s.symbol);
     }
