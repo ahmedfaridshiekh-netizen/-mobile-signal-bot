@@ -30,29 +30,31 @@ const DEFAULT_MIN_SCORE = 7;
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === "/test") {
-
-  if (!env.NTFY_TOPIC) {
-
-    return new Response("Missing NTFY_TOPIC({
+        if (url.pathname === "/") {
+      return new Response(JSON.stringify({
         name: "Mobile Signal Bot V1",
         status: "online",
-        message:"Scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
-        watchlist: { crypto: CRYPTO_BASES, commodities: COMMODITIES.map(x => x.label) }
-      }, null, 2), { headers: { "content-type": "application/json" }});
+        message: "Scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
+        watchlist: {
+          crypto: CRYPTO_BASES,
+          commodities: COMMODITIES.map(x => x.label)
+        }
+      }, null, 2), {
+        headers: { "content-type": "application/json" }
+      });
     }
-   if (url.pathname === "/test") {
-  if (!env.NTFY_TOPIC) {
-    return new Response("Missing NTFY_TOPIC secret", { status: 500 });
-  }
 
-  await sendNtfy(
-    env,
-    "🧪 Mobile Signal Bot V1 test\nntfy alerts are connected."
-  );
+    if (url.pathname === "/test") {
+      if (!env.NTFY_TOPIC) {
+        return new Response("Missing NTFY_TOPIC secret", { status: 500 });
+      }
 
-  return new Response("ntfy test notification sent.");
-}
+      await sendNtfy(
+        env,
+        "🧪 Mobile Signal Bot V1 test\nntfy alerts are connected."
+      );
+
+      return new Response("ntfy test notification sent.");
     }
     if (url.pathname === "/scan") {
       const result = await runScan(env);
