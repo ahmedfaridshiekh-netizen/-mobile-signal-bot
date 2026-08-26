@@ -5,7 +5,9 @@
   "compatibility_date": "2026-08-26",
   "triggers": {
     "crons": ["*/5 * * * *"]
-  },
+  },"observability": {
+  "enabled": true
+},
   "kv_namespaces": [
     {
       "binding": "SIGNAL_STATE",
