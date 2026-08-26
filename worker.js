@@ -30,8 +30,11 @@ const DEFAULT_MIN_SCORE = 7;
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === "/") {
-      return new Response(JSON.stringify({
+    if (url.pathname === "/test") {
+
+  if (!env.NTFY_TOPIC) {
+
+    return new Response("Missing NTFY_TOPIC({
         name: "Mobile Signal Bot V1",
         status: "online",
         message:"Scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
