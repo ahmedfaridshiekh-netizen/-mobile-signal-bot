@@ -1,14 +1,9 @@
 // Mobile Signal Bot V1 — Cloudflare Worker
 // Public market data: MEXC Futures contract API
-// Push notifications: Telegram Bot API
+// Push notifications: ntfy
 //
-// 30 crypto watchlist + Gold + Silver + Brent.
-// Strict 15m entry + 1h confirmation.
-// No automatic trading. Signals only.
-//
-// Required Worker secrets:
-// TELEGRAM_BOT_TOKEN
-// TELEGRAM_CHAT_ID
+// Required Worker secret:
+// NTFY_TOPIC
 //
 // Optional environment variables:
 // MIN_SCORE (default 7)
@@ -39,16 +34,22 @@ export default {
       return new Response(JSON.stringify({
         name: "Mobile Signal Bot V1",
         status: "online",
-        message: "Scanner runs on Cloudflare Cron. Signals are sent to Telegram.",
+        message:message: "Scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
         watchlist: { crypto: CRYPTO_BASES, commodities: COMMODITIES.map(x => x.label) }
       }, null, 2), { headers: { "content-type": "application/json" }});
     }
-    if (url.pathname === "/test") {
-      if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
-        return new Response("Missing Telegram secrets", { status: 500 });
-      }
-      await sendTelegram(env, "🧪 Mobile Signal Bot V1 test\nTelegram alerts are connected.");
-      return new Response("Test notification sent.");
+   if (url.pathname === "/test") {
+  if (!env.NTFY_TOPIC) {
+    return new Response("Missing NTFY_TOPIC secret", { status: 500 });
+  }
+
+  await sendNtfy(
+    env,
+    "🧪 Mobile Signal Bot V1 test\nntfy alerts are connected."
+  );
+
+  return new Response("ntfy test notification sent.");
+}
     }
     if (url.pathname === "/scan") {
       const result = await runScan(env);
