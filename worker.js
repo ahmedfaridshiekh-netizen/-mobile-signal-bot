@@ -1374,11 +1374,16 @@ async function sendNtfy(
       );
 
     if (!response.ok) {
-      console.error(
-        `ntfy HTTP ${response.status}`
-      );
+  const errorText =
+    await response.text();
 
-      return false;
+  console.error(
+    `NTFY ERROR HTTP ${response.status}:`,
+    errorText.slice(0, 500)
+  );
+
+  return false;
+}
     }
 
     return true;
