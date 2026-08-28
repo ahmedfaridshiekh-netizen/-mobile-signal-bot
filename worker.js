@@ -1,6 +1,10 @@
-// Mobile Signal Bot V2 — VANTIQ Quality + 30m Heartbeat
-// Cloudflare Worker / NTFY
-// Quality-first scanner: fewer, stronger signals.
+// Mobile Signal Bot V2 — Cloudflare Worker
+// Subrequest-safe rotating scanner.
+// NTFY setup is unchanged.
+//
+// Required secret: NTFY_TOPIC
+// Optional: MIN_SCORE
+// KV binding: SIGNAL_STATE
 
 const CRYPTO_BASES = [
   "BTC","ETH","BNB","SOL","XRP","DOGE","ADA","AVAX","LINK","DOT",
@@ -15,13 +19,11 @@ const COMMODITIES = [
 ];
 
 const MEXC = "https://contract.mexc.com";
-
-const DEFAULT_MIN_SCORE = 8;
+const DEFAULT_MIN_SCORE = 7;
 const SCAN_BATCH_SIZE = 12;
 
 const HEARTBEAT_MS = 30 * 60 * 1000;
-const MAX_EMA20_DISTANCE_ATR = 1.25;
-const MAX_BODY_PCT = 0.70;
+const HEARTBEAT_KEY = "heartbeat:last";
 
 const STATIC_SYMBOLS = Object.fromEntries(
   CRYPTO_BASES.map(base => [base, `${base}_USDT`])
@@ -41,11 +43,14 @@ export default {
       return new Response(JSON.stringify({
         name: "Mobile Signal Bot V2",
         status: "online",
-        message: "VANTIQ-quality rotating scanner with ntfy heartbeat.",
+        message:
+          "Rotating scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
         batchSize: SCAN_BATCH_SIZE,
-        minScore: Number(env.MIN_SCORE || DEFAULT_MIN_SCORE)
+        heartbeatMinutes: 30
       }, null, 2), {
-        headers: { "content-type": "application/json" }
+        headers: {
+          "content-type": "application/json"
+        }
       });
     }
 
@@ -56,8 +61,12 @@ export default {
       );
 
       return new Response(
-        ok ? "ntfy test notification sent." : "ntfy test failed.",
-        { status: ok ? 200 : 502 }
+        ok
+          ? "ntfy test notification sent."
+          : "ntfy test failed.",
+        {
+          status: ok ? 200 : 502
+        }
       );
     }
 
@@ -67,7 +76,11 @@ export default {
 
         return new Response(
           JSON.stringify(result, null, 2),
-          { headers: { "content-type": "application/json" } }
+          {
+            headers: {
+              "content-type": "application/json"
+            }
+          }
         );
       } catch (e) {
         return new Response(
@@ -77,13 +90,17 @@ export default {
           }),
           {
             status: 500,
-            headers: { "content-type": "application/json" }
+            headers: {
+              "content-type": "application/json"
+            }
           }
         );
       }
     }
 
-    return new Response("Not found", { status: 404 });
+    return new Response("Not found", {
+      status: 404
+    });
   },
 
   async scheduled(controller, env, ctx) {
@@ -103,7 +120,8 @@ function buildWatchlist() {
   }));
 
   for (const item of COMMODITIES) {
-    const candidates = COMMODITY_CANDIDATES[item.label] || [];
+    const candidates =
+      COMMODITY_CANDIDATES[item.label] || [];
 
     if (candidates.length) {
       wanted.push({
@@ -119,22 +137,31 @@ function buildWatchlist() {
 }
 
 async function getRotationIndex(env, total) {
-  const slot = Math.floor(Date.now() / 300000);
+  const slot =
+    Math.floor(Date.now() / 300000);
 
   if (!env.SIGNAL_STATE) {
     return slot % total;
   }
 
   try {
-    const raw = await env.SIGNAL_STATE.get("scan:cursor");
+    const raw =
+      await env.SIGNAL_STATE.get(
+        "scan:cursor"
+      );
+
     const prev = Number(raw);
-    const idx = Number.isFinite(prev)
-      ? prev
-      : slot % total;
+
+    const idx =
+      Number.isFinite(prev)
+        ? prev
+        : slot % total;
 
     await env.SIGNAL_STATE.put(
       "scan:cursor",
-      String((idx + SCAN_BATCH_SIZE) % total)
+      String(
+        (idx + SCAN_BATCH_SIZE) % total
+      )
     );
 
     return idx % total;
@@ -153,11 +180,17 @@ function selectBatch(wanted, start) {
 
   for (
     let i = 0;
-    i < Math.min(SCAN_BATCH_SIZE, wanted.length);
+    i < Math.min(
+      SCAN_BATCH_SIZE,
+      wanted.length
+    );
     i++
   ) {
     out.push(
-      wanted[(start + i) % wanted.length]
+      wanted[
+        (start + i) %
+        wanted.length
+      ]
     );
   }
 
@@ -165,55 +198,96 @@ function selectBatch(wanted, start) {
 }
 
 async function runScan(env) {
-  const minScore = Number(
-    env.MIN_SCORE || DEFAULT_MIN_SCORE
-  );
+  const minScore =
+    Number(
+      env.MIN_SCORE ||
+      DEFAULT_MIN_SCORE
+    );
 
-  const wanted = buildWatchlist();
-  const start = await getRotationIndex(
-    env,
-    wanted.length
-  );
+  const wanted =
+    buildWatchlist();
 
-  const batch = selectBatch(
-    wanted,
-    start
-  );
+  const start =
+    await getRotationIndex(
+      env,
+      wanted.length
+    );
+
+  const batch =
+    selectBatch(
+      wanted,
+      start
+    );
 
   const results = [];
 
-  for (let i = 0; i < batch.length; i += 6) {
-    const chunk = batch.slice(i, i + 6);
+  for (
+    let i = 0;
+    i < batch.length;
+    i += 6
+  ) {
+    const chunk =
+      batch.slice(i, i + 6);
 
-    const chunkResults = await Promise.all(
-      chunk.map(x =>
-        scanSymbol(x, env, minScore)
-      )
+    const chunkResults =
+      await Promise.all(
+        chunk.map(x =>
+          scanSymbol(
+            x,
+            env,
+            minScore
+          )
+        )
+      );
+
+    results.push(
+      ...chunkResults
     );
 
-    results.push(...chunkResults);
-
-    if (i + 6 < batch.length) {
+    if (
+      i + 6 <
+      batch.length
+    ) {
       await sleep(150);
     }
   }
 
-  const alerts = results.filter(
-    x =>
-      x.signal === "BUY" ||
-      x.signal === "SELL"
-  );
+  const alerts =
+    results.filter(
+      x =>
+        x.signal === "BUY" ||
+        x.signal === "SELL"
+    );
 
   const sent = [];
 
+  const noSetupReasons =
+    results
+      .filter(
+        x =>
+          x.signal !== "BUY" &&
+          x.signal !== "SELL"
+      )
+      .map(
+        x =>
+          `${x.label || x.symbol}: ${
+            x.reason ||
+            "No valid setup"
+          }`
+      );
+
   for (const s of alerts) {
-    const key = `state:${s.symbol}`;
+    const key =
+      `state:${s.symbol}`;
+
     let previous = null;
 
     if (env.SIGNAL_STATE) {
       try {
         previous =
-          await env.SIGNAL_STATE.get(key);
+          await env.SIGNAL_STATE.get(
+            key
+          );
       } catch (e) {
         console.error(
           `KV read warning ${s.symbol}:`,
@@ -222,15 +296,19 @@ async function runScan(env) {
       }
     }
 
-    // Same-direction signals are suppressed.
-    // Only a genuine direction change creates a notification.
-    if (previous !== s.signal) {
-      const ok = await sendNtfy(
-        env,
-        formatAlert(s)
-      );
+    if (
+      previous !== s.signal
+    ) {
+      const ok =
+        await sendNtfy(
+          env,
+          formatAlert(s)
+        );
 
-      if (ok && env.SIGNAL_STATE) {
+      if (
+        ok &&
+        env.SIGNAL_STATE
+      ) {
         try {
           await env.SIGNAL_STATE.put(
             key,
@@ -245,14 +323,15 @@ async function runScan(env) {
       }
 
       if (ok) {
-        sent.push(s.symbol);
+        sent.push(
+          s.symbol
+        );
       }
     }
   }
-
-  // 30-minute alive heartbeat.
-  let heartbeatSent = false;
+    // Reliable 30-minute heartbeat.
   const now = Date.now();
+
   let lastHeartbeat = 0;
 
   if (env.SIGNAL_STATE) {
@@ -260,7 +339,7 @@ async function runScan(env) {
       lastHeartbeat =
         Number(
           await env.SIGNAL_STATE.get(
-            "heartbeat:last"
+            HEARTBEAT_KEY
           )
         ) || 0;
     } catch (e) {
@@ -271,15 +350,36 @@ async function runScan(env) {
     }
   }
 
+  let heartbeatSent = false;
+
   if (
     !sent.length &&
-    now - lastHeartbeat >= HEARTBEAT_MS
+    now - lastHeartbeat >=
+      HEARTBEAT_MS
   ) {
-    heartbeatSent = await sendNtfy(
-      env,
+    const uniqueReasons =
+      [...new Set(
+        noSetupReasons
+      )];
+
+    const sample =
+      uniqueReasons
+        .slice(0, 3)
+        .join("\n");
+
+    const message =
       "🔎 Bot is searching for the best setup for you... ❤️\n" +
-      "No valid setup yet. Market is being monitored continuously."
-    );
+      "No valid setup detected yet.\n\n" +
+      (
+        sample ||
+        "Market conditions are being monitored."
+      );
+
+    heartbeatSent =
+      await sendNtfy(
+        env,
+        message
+      );
 
     if (
       heartbeatSent &&
@@ -287,7 +387,7 @@ async function runScan(env) {
     ) {
       try {
         await env.SIGNAL_STATE.put(
-          "heartbeat:last",
+          HEARTBEAT_KEY,
           String(now)
         );
       } catch (e) {
@@ -302,23 +402,52 @@ async function runScan(env) {
   return {
     ok: true,
     scanned: batch.length,
-    totalWatchlist: wanted.length,
-    rotationStart: start,
-    nextRotationStart:
-      (start + SCAN_BATCH_SIZE) %
+    totalWatchlist:
       wanted.length,
-    signals: alerts,
+    rotationStart:
+      start,
+    nextRotationStart:
+      (
+        start +
+        SCAN_BATCH_SIZE
+      ) % wanted.length,
+    signals:
+      alerts,
+    noSetupReasons:
+      [
+        ...new Set(
+          noSetupReasons
+        )
+      ].slice(0, 10),
     sent,
     heartbeatSent,
     timestamp:
       new Date().toISOString()
   };
-  async function scanSymbol(item, env, minScore) {
-  const symbol = item.symbol;
+}
+
+async function scanSymbol(
+  item,
+  env,
+  minScore
+) {
+  const symbol =
+    item.symbol;
 
   try {
-    const candles15 = await fetchKlines(symbol, "Min15", 220);
-    const candles1h = await fetchKlines(symbol, "Min60", 220);
+    const candles15 =
+      await getKlines(
+        symbol,
+        "Min15",
+        220
+      );
+
+    const candles1h =
+      await getKlines(
+        symbol,
+        "Min60",
+        220
+      );
 
     if (
       !candles15 ||
@@ -327,260 +456,239 @@ async function runScan(env) {
       candles1h.length < 210
     ) {
       return {
-        symbol,
+        ...item,
         signal: "NONE",
         score: 0,
-        reason: "Insufficient market data"
+        reason:
+          "Insufficient market data"
       };
     }
 
-    const c15 = normalizeCandles(candles15);
-    const c1h = normalizeCandles(candles1h);
+    const a15 =
+      analyze(candles15);
 
-    // Work only with CLOSED candles.
-    const x15 = c15.slice(0, -1);
-    const x1h = c1h.slice(0, -1);
+    const a1h =
+      analyze(candles1h);
 
-    const close15 = x15.map(x => x.close);
-    const close1h = x1h.map(x => x.close);
+    const longScore =
+      (a15.close >
+        a15.ema200 ? 1 : 0) +
 
-    const ema20_15 = ema(close15, 20);
-    const ema50_15 = ema(close15, 50);
-    const ema200_15 = ema(close15, 200);
+      (a15.ema20 >
+        a15.ema50 ? 1 : 0) +
 
-    const ema20_1h = ema(close1h, 20);
-    const ema50_1h = ema(close1h, 50);
-    const ema200_1h = ema(close1h, 200);
+      (a1h.close >
+        a1h.ema200 ? 1 : 0) +
 
-    const rsi15 = RSI(close15, 14);
-    const rsi1h = RSI(close1h, 14);
+      (a1h.ema20 >
+        a1h.ema50 ? 1 : 0) +
 
-    const macd15 = MACD(close15);
-    const macd1h = MACD(close1h);
+      (
+        a15.rsi >= 52 &&
+        a15.rsi <= 72
+          ? 1
+          : 0
+      ) +
 
-    const atr15 = ATR(x15, 14);
+      (
+        a15.macd >
+          a15.macdSignal &&
+        a15.hist > 0
+          ? 1
+          : 0
+      ) +
 
-    const last = x15[x15.length - 1];
-    const prev = x15[x15.length - 2];
+      (
+        a1h.hist > 0
+          ? 1
+          : 0
+      ) +
 
-    const price = last.close;
-    const e20 = ema20_15[ema20_15.length - 1];
-    const e50 = ema50_15[ema50_15.length - 1];
-    const e200 = ema200_15[ema200_15.length - 1];
+      (
+        a15.volume >
+          a15.volumeSma * 1.05
+          ? 1
+          : 0
+      ) +
 
-    const h20 = ema20_1h[ema20_1h.length - 1];
-    const h50 = ema50_1h[ema50_1h.length - 1];
-    const h200 = ema200_1h[ema200_1h.length - 1];
+      (
+        a15.breakUp ||
+        a15.reclaimUp
+          ? 1
+          : 0
+      ) +
 
-    const r15 = rsi15[rsi15.length - 1];
-    const r1 = rsi1h[rsi1h.length - 1];
-
-    const m15 = macd15[macd15.length - 1];
-    const pm15 = macd15[macd15.length - 2];
-
-    const m1 = macd1h[macd1h.length - 1];
-    const pm1 = macd1h[macd1h.length - 2];
-
-    const atr = atr15[atr15.length - 1];
-
-    if (
-      !Number.isFinite(price) ||
-      !Number.isFinite(e20) ||
-      !Number.isFinite(e50) ||
-      !Number.isFinite(e200) ||
-      !Number.isFinite(h20) ||
-      !Number.isFinite(h50) ||
-      !Number.isFinite(h200) ||
-      !Number.isFinite(r15) ||
-      !Number.isFinite(r1) ||
-      !Number.isFinite(atr) ||
-      atr <= 0
-    ) {
-      return {
-        symbol,
-        signal: "NONE",
-        score: 0,
-        reason: "Indicator data unavailable"
-      };
-    }
-
-    const body = Math.abs(last.close - last.open);
-    const range = Math.max(
-      last.high - last.low,
-      Number.EPSILON
-    );
-
-    const bodyPct = body / range;
-
-    const distAtr =
-      Math.abs(price - e20) / atr;
-
-    const recent = x15.slice(-20);
-
-    const resistance = Math.max(
-      ...recent
-        .slice(0, -1)
-        .map(x => x.high)
-    );
-
-    const support = Math.min(
-      ...recent
-        .slice(0, -1)
-        .map(x => x.low)
-    );
-
-    const volumeAvg =
-      SMA(
-        x15.slice(-21, -1).map(x => x.volume),
-        20
+      (
+        a15.close >
+          a15.open
+          ? 1
+          : 0
       );
 
-    const volumeOk =
-      Number.isFinite(volumeAvg) &&
-      last.volume > volumeAvg * 1.05;
+    const shortScore =
+      (a15.close <
+        a15.ema200 ? 1 : 0) +
 
-    const bullish15 =
-      e20 > e50 &&
-      e50 > e200;
+      (a15.ema20 <
+        a15.ema50 ? 1 : 0) +
 
-    const bearish15 =
-      e20 < e50 &&
-      e50 < e200;
+      (a1h.close <
+        a1h.ema200 ? 1 : 0) +
 
-    const bullish1h =
-      h20 > h50 &&
-      h50 > h200;
+      (a1h.ema20 <
+        a1h.ema50 ? 1 : 0) +
 
-    const bearish1h =
-      h20 < h50 &&
-      h50 < h200;
+      (
+        a15.rsi >= 28 &&
+        a15.rsi <= 48
+          ? 1
+          : 0
+      ) +
 
-    const macdBull =
-      m15.hist > 0 &&
-      m15.hist >= pm15.hist &&
-      m1.hist > 0 &&
-      m1.hist >= pm1.hist;
+      (
+        a15.macd <
+          a15.macdSignal &&
+        a15.hist < 0
+          ? 1
+          : 0
+      ) +
 
-    const macdBear =
-      m15.hist < 0 &&
-      m15.hist <= pm15.hist &&
-      m1.hist < 0 &&
-      m1.hist <= pm1.hist;
+      (
+        a1h.hist < 0
+          ? 1
+          : 0
+      ) +
 
-    const pullbackLong =
-      prev.low <= e20 * 1.003 &&
-      last.close > e20 &&
-      last.close > prev.high * 0.997;
+      (
+        a15.volume >
+          a15.volumeSma * 1.05
+          ? 1
+          : 0
+      ) +
 
-    const pullbackShort =
-      prev.high >= e20 * 0.997 &&
-      last.close < e20 &&
-      last.close < prev.low * 1.003;
+      (
+        a15.breakDown ||
+        a15.reclaimDown
+          ? 1
+          : 0
+      ) +
 
-    const reclaimLong =
-      prev.close < e20 &&
-      last.close > e20;
+      (
+        a15.close <
+          a15.open
+          ? 1
+          : 0
+      );
 
-    const reclaimShort =
-      prev.close > e20 &&
-      last.close < e20;
-
-    const breakoutLong =
-      last.close > resistance;
-
-    const breakoutShort =
-      last.close < support;
-
-    const nearResistance =
-      (resistance - price) / atr;
-
-    const nearSupport =
-      (price - support) / atr;
-
-    // Exhaustion protection:
-    // Do NOT buy the top of an already stretched bullish move.
-    const longExhausted =
-      distAtr > MAX_EMA20_DISTANCE_ATR ||
-      bodyPct > MAX_BODY_PCT ||
-      r15 > 74 ||
-      r1 > 76 ||
-      nearResistance < 0.45;
-
-    // Do NOT short the bottom of an already stretched bearish move.
-    const shortExhausted =
-      distAtr > MAX_EMA20_DISTANCE_ATR ||
-      bodyPct > MAX_BODY_PCT ||
-      r15 < 26 ||
-      r1 < 24 ||
-      nearSupport < 0.45;
-
-    let longScore = 0;
-    let shortScore = 0;
-
-    if (bullish1h) longScore++;
-    if (bullish15) longScore++;
-    if (price > h200) longScore++;
-    if (price > e200) longScore++;
-    if (r15 >= 50 && r15 <= 68) longScore++;
-    if (r1 >= 48 && r1 <= 70) longScore++;
-    if (macdBull) longScore++;
-    if (volumeOk) longScore++;
-    if (pullbackLong || reclaimLong) longScore++;
-    if (breakoutLong) longScore++;
-
-    if (bearish1h) shortScore++;
-    if (bearish15) shortScore++;
-    if (price < h200) shortScore++;
-    if (price < e200) shortScore++;
-    if (r15 >= 32 && r15 <= 50) shortScore++;
-    if (r1 >= 30 && r1 <= 52) shortScore++;
-    if (macdBear) shortScore++;
-    if (volumeOk) shortScore++;
-    if (pullbackShort || reclaimShort) shortScore++;
-    if (breakoutShort) shortScore++;
-
-    // A valid signal needs trend + structure + momentum.
-    // This prevents a raw indicator-count signal.
     const longStructure =
-      bullish1h &&
-      bullish15 &&
-      (pullbackLong || reclaimLong || breakoutLong);
+      a15.close >
+        a15.ema200 &&
+      a15.ema20 >
+        a15.ema50 &&
+      (
+        a15.breakUp ||
+        a15.reclaimUp
+      );
 
     const shortStructure =
-      bearish1h &&
-      bearish15 &&
-      (pullbackShort || reclaimShort || breakoutShort);
+      a15.close <
+        a15.ema200 &&
+      a15.ema20 <
+        a15.ema50 &&
+      (
+        a15.breakDown ||
+        a15.reclaimDown
+      );
 
     const longMomentum =
-      macdBull &&
-      r15 >= 50 &&
-      r15 <= 70;
+      a15.rsi >= 52 &&
+      a15.rsi <= 72 &&
+      a15.macd >
+        a15.macdSignal &&
+      a15.hist > 0 &&
+      a1h.hist > 0;
 
     const shortMomentum =
-      macdBear &&
-      r15 >= 30 &&
-      r15 <= 50;
+      a15.rsi >= 28 &&
+      a15.rsi <= 48 &&
+      a15.macd <
+        a15.macdSignal &&
+      a15.hist < 0 &&
+      a1h.hist < 0;
+
+    const pullbackLong =
+      a15.low <=
+        a15.ema20 &&
+      a15.close >
+        a15.ema20;
+
+    const reclaimLong =
+      a15.reclaimUp;
+
+    const pullbackShort =
+      a15.high >=
+        a15.ema20 &&
+      a15.close <
+        a15.ema20;
+
+    const reclaimShort =
+      a15.reclaimDown;
+
+    const notChasing =
+      Math.abs(
+        a15.close -
+        a15.ema20
+      ) /
+      Math.max(
+        a15.atr,
+        1e-12
+      ) <= 2.0;
+
+    const longExhausted =
+      a15.rsi > 72 ||
+      (
+        a15.close >
+          a15.ema20 +
+          a15.atr * 2.0
+      );
+
+    const shortExhausted =
+      a15.rsi < 28 ||
+      (
+        a15.close <
+          a15.ema20 -
+          a15.atr * 2.0
+      );
 
     let signal = "NONE";
     let score = 0;
-    let reason = "No high-quality setup";
+    let reason =
+      "No high-quality setup";
     let strategy = "WAIT";
 
     if (
       longScore >= minScore &&
       longStructure &&
       longMomentum &&
-      !longExhausted
+      !longExhausted &&
+      notChasing
     ) {
       signal = "BUY";
       score = longScore;
 
-      if (pullbackLong || reclaimLong) {
-        strategy = "TREND_PULLBACK";
+      if (
+        pullbackLong ||
+        reclaimLong
+      ) {
+        strategy =
+          "TREND_PULLBACK";
+
         reason =
           "Bullish HTF trend + 15m pullback/reclaim + momentum";
       } else {
-        strategy = "BREAKOUT_RETEST";
+        strategy =
+          "BREAKOUT_RETEST";
+
         reason =
           "Bullish trend + confirmed breakout structure";
       }
@@ -588,27 +696,39 @@ async function runScan(env) {
       shortScore >= minScore &&
       shortStructure &&
       shortMomentum &&
-      !shortExhausted
+      !shortExhausted &&
+      notChasing
     ) {
       signal = "SELL";
       score = shortScore;
 
-      if (pullbackShort || reclaimShort) {
-        strategy = "TREND_PULLBACK";
+      if (
+        pullbackShort ||
+        reclaimShort
+      ) {
+        strategy =
+          "TREND_PULLBACK";
+
         reason =
           "Bearish HTF trend + 15m pullback/reclaim + momentum";
       } else {
-        strategy = "BREAKOUT_RETEST";
+        strategy =
+          "BREAKOUT_RETEST";
+
         reason =
           "Bearish trend + confirmed breakdown structure";
       }
     } else {
-      // Explain why a seemingly bullish/bearish market
-      // was rejected instead of producing a bad signal.
-      if (longScore >= minScore && longExhausted) {
+      if (
+        longScore >= minScore &&
+        longExhausted
+      ) {
         reason =
           "Bullish but late/extended — waiting for pullback";
-      } else if (shortScore >= minScore && shortExhausted) {
+      } else if (
+        shortScore >= minScore &&
+        shortExhausted
+      ) {
         reason =
           "Bearish but late/extended — waiting for pullback";
       } else if (
@@ -617,507 +737,538 @@ async function runScan(env) {
       ) {
         reason =
           "Indicators align but structure/entry timing is incomplete";
+      } else if (
+        !notChasing
+      ) {
+        reason =
+          "Entry rejected because price is extended";
       }
     }
+      // Reliable 30-minute heartbeat.
+  const now = Date.now();
 
-    return {
-      symbol,
-      label: item.label,
-      category: item.category,
-      price,
-      signal,
-      score,
-      strategy,
-      reason,
-      rsi15: round(r15, 2),
-      rsi1h: round(r1, 2),
-      atr: round(atr, 8),
-      ema20: round(e20, 8),
-      ema50: round(e50, 8),
-      ema200: round(e200, 8),
-      distanceAtr: round(distAtr, 2),
-      bodyPct: round(bodyPct, 2),
-      volumeOk,
-      pullbackLong,
-      pullbackShort,
-      reclaimLong,
-      reclaimShort,
-      breakoutLong,
-      breakoutShort,
-      timestamp:
-        new Date(last.time || Date.now()).toISOString()
-    };
+  let lastHeartbeat = 0;
 
-  } catch (e) {
-    console.error(
-      `SCAN ERROR ${symbol}:`,
-      e?.message || e
-    );
-
-    return {
-      symbol,
-      signal: "NONE",
-      score: 0,
-      reason:
-        `Scanner error: ${String(e?.message || e)}`
-    };
-  }
-}
-
-async function fetchKlines(symbol, interval, limit) {
-  const url =
-    `${MEXC}/api/v1/contract/kline/${encodeURIComponent(symbol)}` +
-    `?interval=${encodeURIComponent(interval)}` +
-    `&limit=${limit}`;
-
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  if (env.SIGNAL_STATE) {
     try {
-      const r = await fetch(url, {
-        method: "GET",
-        headers: {
-          "accept": "application/json"
-        }
-      });
-
-      if (!r.ok) {
-        throw new Error(
-          `MEXC HTTP ${r.status}`
-        );
-      }
-
-      const j = await r.json();
-
-      if (!j || !Array.isArray(j.data)) {
-        throw new Error(
-          "Invalid MEXC kline response"
-        );
-      }
-
-      return j.data;
+      lastHeartbeat =
+        Number(
+          await env.SIGNAL_STATE.get(
+            HEARTBEAT_KEY
+          )
+        ) || 0;
     } catch (e) {
-      lastError = e;
-
-      if (attempt < 3) {
-        await sleep(250 * attempt);
-      }
-    }
-  }
-
-  throw lastError || new Error(
-    "MEXC kline request failed"
-  );
-}
-
-function normalizeCandles(raw) {
-  return raw
-    .map(x => {
-      if (Array.isArray(x)) {
-        return {
-          time: Number(x[0]),
-          open: Number(x[1]),
-          high: Number(x[2]),
-          low: Number(x[3]),
-          close: Number(x[4]),
-          volume: Number(x[5])
-        };
-      }
-
-      return {
-        time: Number(x.time ?? x.t ?? x.timestamp),
-        open: Number(x.open ?? x.o),
-        high: Number(x.high ?? x.h),
-        low: Number(x.low ?? x.l),
-        close: Number(x.close ?? x.c),
-        volume: Number(x.volume ?? x.v)
-      };
-    })
-    .filter(
-      x =>
-        Number.isFinite(x.open) &&
-        Number.isFinite(x.high) &&
-        Number.isFinite(x.low) &&
-        Number.isFinite(x.close)
-    )
-    .sort((a, b) => a.time - b.time);
-}
-
-function SMA(values, period) {
-  if (values.length < period) return NaN;
-
-  let sum = 0;
-
-  for (
-    let i = values.length - period;
-    i < values.length;
-    i++
-  ) {
-    sum += Number(values[i]) || 0;
-  }
-
-  return sum / period;
-}
-
-function ema(values, period) {
-  if (values.length < period) return [];
-
-  const out = [];
-  const k = 2 / (period + 1);
-
-  let prev = SMA(
-    values.slice(0, period),
-    period
-  );
-
-  out.push(prev);
-
-  for (let i = period; i < values.length; i++) {
-    prev =
-      values[i] * k +
-      prev * (1 - k);
-
-    out.push(prev);
-  }
-
-  return out;
-}
-
-function RSI(values, period = 14) {
-  if (values.length <= period) return [];
-
-  let gains = 0;
-  let losses = 0;
-
-  for (let i = 1; i <= period; i++) {
-    const d = values[i] - values[i - 1];
-
-    if (d >= 0) gains += d;
-    else losses -= d;
-  }
-
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
-
-  const out = [];
-
-  function value() {
-    if (avgLoss === 0) return 100;
-
-    const rs = avgGain / avgLoss;
-    return 100 - 100 / (1 + rs);
-  }
-
-  out.push(value());
-
-  for (
-    let i = period + 1;
-    i < values.length;
-    i++
-  ) {
-    const d = values[i] - values[i - 1];
-    const gain = Math.max(d, 0);
-    const loss = Math.max(-d, 0);
-
-    avgGain =
-      (avgGain * (period - 1) + gain) /
-      period;
-
-    avgLoss =
-      (avgLoss * (period - 1) + loss) /
-      period;
-
-    out.push(value());
-  }
-
-  return out;
-}
-
-function MACD(
-  values,
-  fastPeriod = 12,
-  slowPeriod = 26,
-  signalPeriod = 9
-) {
-  const fast = ema(values, fastPeriod);
-  const slow = ema(values, slowPeriod);
-
-  const macdLine = [];
-
-  const offset =
-    fastPeriod - slowPeriod;
-
-  for (let i = 0; i < slow.length; i++) {
-    const fi = i + offset;
-
-    if (fi >= 0 && fi < fast.length) {
-      macdLine.push(
-        fast[fi] - slow[i]
+      console.error(
+        "KV heartbeat read warning:",
+        e?.message || e
       );
     }
   }
 
-  const signal = ema(
-    macdLine,
-    signalPeriod
-  );
+  let heartbeatSent = false;
 
-  const out = [];
-
-  for (
-    let i = signalPeriod - 1;
-    i < macdLine.length;
-    i++
+  if (
+    !sent.length &&
+    now - lastHeartbeat >=
+      HEARTBEAT_MS
   ) {
-    const s =
-      signal[i - (signalPeriod - 1)];
+    const uniqueReasons =
+      [...new Set(
+        noSetupReasons
+      )];
 
-    const m = macdLine[i];
+    const sample =
+      uniqueReasons
+        .slice(0, 3)
+        .join("\n");
 
-    out.push({
-      macd: m,
-      signal: s,
-      hist: m - s
-    });
+    const message =
+      "🔎 Bot is searching for the best setup for you... ❤️\n" +
+      "No valid setup detected yet.\n\n" +
+      (
+        sample ||
+        "Market conditions are being monitored."
+      );
+
+    heartbeatSent =
+      await sendNtfy(
+        env,
+        message
+      );
+
+    if (
+      heartbeatSent &&
+      env.SIGNAL_STATE
+    ) {
+      try {
+        await env.SIGNAL_STATE.put(
+          HEARTBEAT_KEY,
+          String(now)
+        );
+      } catch (e) {
+        console.error(
+          "KV heartbeat write warning:",
+          e?.message || e
+        );
+      }
+    }
   }
 
-  return out;
+  return {
+    ok: true,
+    scanned: batch.length,
+    totalWatchlist:
+      wanted.length,
+    rotationStart:
+      start,
+    nextRotationStart:
+      (
+        start +
+        SCAN_BATCH_SIZE
+      ) % wanted.length,
+    signals:
+      alerts,
+    noSetupReasons:
+      [
+        ...new Set(
+          noSetupReasons
+        )
+      ].slice(0, 10),
+    sent,
+    heartbeatSent,
+    timestamp:
+      new Date().toISOString()
+  };
 }
 
-function ATR(candles, period = 14) {
-  if (candles.length <= period) return [];
+async function scanSymbol(
+  item,
+  env,
+  minScore
+) {
+  const symbol =
+    item.symbol;
 
-  const tr = [];
+  try {
+    const candles15 =
+      await getKlines(
+        symbol,
+        "Min15",
+        220
+      );
 
-  for (let i = 1; i < candles.length; i++) {
-    const c = candles[i];
-    const p = candles[i - 1];
+    const candles1h =
+      await getKlines(
+        symbol,
+        "Min60",
+        220
+      );
 
-    tr.push(
+    if (
+      !candles15 ||
+      candles15.length < 210 ||
+      !candles1h ||
+      candles1h.length < 210
+    ) {
+      return {
+        ...item,
+        signal: "NONE",
+        score: 0,
+        reason:
+          "Insufficient market data"
+      };
+    }
+
+    const a15 =
+      analyze(candles15);
+
+    const a1h =
+      analyze(candles1h);
+
+    const longScore =
+      (a15.close >
+        a15.ema200 ? 1 : 0) +
+
+      (a15.ema20 >
+        a15.ema50 ? 1 : 0) +
+
+      (a1h.close >
+        a1h.ema200 ? 1 : 0) +
+
+      (a1h.ema20 >
+        a1h.ema50 ? 1 : 0) +
+
+      (
+        a15.rsi >= 52 &&
+        a15.rsi <= 72
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.macd >
+          a15.macdSignal &&
+        a15.hist > 0
+          ? 1
+          : 0
+      ) +
+
+      (
+        a1h.hist > 0
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.volume >
+          a15.volumeSma * 1.05
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.breakUp ||
+        a15.reclaimUp
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.close >
+          a15.open
+          ? 1
+          : 0
+      );
+
+    const shortScore =
+      (a15.close <
+        a15.ema200 ? 1 : 0) +
+
+      (a15.ema20 <
+        a15.ema50 ? 1 : 0) +
+
+      (a1h.close <
+        a1h.ema200 ? 1 : 0) +
+
+      (a1h.ema20 <
+        a1h.ema50 ? 1 : 0) +
+
+      (
+        a15.rsi >= 28 &&
+        a15.rsi <= 48
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.macd <
+          a15.macdSignal &&
+        a15.hist < 0
+          ? 1
+          : 0
+      ) +
+
+      (
+        a1h.hist < 0
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.volume >
+          a15.volumeSma * 1.05
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.breakDown ||
+        a15.reclaimDown
+          ? 1
+          : 0
+      ) +
+
+      (
+        a15.close <
+          a15.open
+          ? 1
+          : 0
+      );
+
+    const longStructure =
+      a15.close >
+        a15.ema200 &&
+      a15.ema20 >
+        a15.ema50 &&
+      (
+        a15.breakUp ||
+        a15.reclaimUp
+      );
+
+    const shortStructure =
+      a15.close <
+        a15.ema200 &&
+      a15.ema20 <
+        a15.ema50 &&
+      (
+        a15.breakDown ||
+        a15.reclaimDown
+      );
+
+    const longMomentum =
+      a15.rsi >= 52 &&
+      a15.rsi <= 72 &&
+      a15.macd >
+        a15.macdSignal &&
+      a15.hist > 0 &&
+      a1h.hist > 0;
+
+    const shortMomentum =
+      a15.rsi >= 28 &&
+      a15.rsi <= 48 &&
+      a15.macd <
+        a15.macdSignal &&
+      a15.hist < 0 &&
+      a1h.hist < 0;
+
+    const pullbackLong =
+      a15.low <=
+        a15.ema20 &&
+      a15.close >
+        a15.ema20;
+
+    const reclaimLong =
+      a15.reclaimUp;
+
+    const pullbackShort =
+      a15.high >=
+        a15.ema20 &&
+      a15.close <
+        a15.ema20;
+
+    const reclaimShort =
+      a15.reclaimDown;
+
+    const notChasing =
+      Math.abs(
+        a15.close -
+        a15.ema20
+      ) /
       Math.max(
-        c.high - c.low,
-        Math.abs(c.high - p.close),
-        Math.abs(c.low - p.close)
-      )
-    );
-  }
+        a15.atr,
+        1e-12
+      ) <= 2.0;
 
-  let avg =
-    tr
-      .slice(0, period)
-      .reduce((a, b) => a + b, 0) /
-    period;
+    const longExhausted =
+      a15.rsi > 72 ||
+      (
+        a15.close >
+          a15.ema20 +
+          a15.atr * 2.0
+      );
 
-  const out = [avg];
+    const shortExhausted =
+      a15.rsi < 28 ||
+      (
+        a15.close <
+          a15.ema20 -
+          a15.atr * 2.0
+      );
 
-  for (let i = period; i < tr.length; i++) {
-    avg =
-      (avg * (period - 1) + tr[i]) /
-      period;
+    let signal = "NONE";
+    let score = 0;
+    let reason =
+      "No high-quality setup";
+    let strategy = "WAIT";
 
-    out.push(avg);
-  }
+    if (
+      longScore >= minScore &&
+      longStructure &&
+      longMomentum &&
+      !longExhausted &&
+      notChasing
+    ) {
+      signal = "BUY";
+      score = longScore;
 
-  return out;
-}
+      if (
+        pullbackLong ||
+        reclaimLong
+      ) {
+        strategy =
+          "TREND_PULLBACK";
 
-function round(value, digits = 4) {
-  if (!Number.isFinite(value)) return 0;
+        reason =
+          "Bullish HTF trend + 15m pullback/reclaim + momentum";
+      } else {
+        strategy =
+          "BREAKOUT_RETEST";
 
-  const p = 10 ** digits;
+        reason =
+          "Bullish trend + confirmed breakout structure";
+      }
+    } else if (
+      shortScore >= minScore &&
+      shortStructure &&
+      shortMomentum &&
+      !shortExhausted &&
+      notChasing
+    ) {
+      signal = "SELL";
+      score = shortScore;
 
-  return Math.round(value * p) / p;
-}
+      if (
+        pullbackShort ||
+        reclaimShort
+      ) {
+        strategy =
+          "TREND_PULLBACK";
 
-function sleep(ms) {
-  return new Promise(
-    resolve => setTimeout(resolve, ms)
-  );
-}
+        reason =
+          "Bearish HTF trend + 15m pullback/reclaim + momentum";
+      } else {
+        strategy =
+          "BREAKOUT_RETEST";
 
-function formatAlert(s) {
-  const emoji =
-    s.signal === "BUY"
-      ? "🟢"
-      : "🔴";
-
-  const side =
-    s.signal === "BUY"
-      ? "CONFIRMED LONG"
-      : "CONFIRMED SHORT";
-
-  return (
-    `${emoji} ${s.label || s.symbol} — ${side}\n` +
-    `Quality: ${s.score}/10\n` +
-    `Strategy: ${s.strategy}\n` +
-    `Price: ${s.price}\n` +
-    `RSI 15m: ${s.rsi15}\n` +
-    `RSI 1H: ${s.rsi1h}\n` +
-    `Reason: ${s.reason}\n` +
-    `⚠️ Signal only — confirm risk before trading.`
-  );
-}
-
-async function sendNtfy(env, message) {
+        reason =
+          "Bearish trend + confirmed breakdown structure";
+      }
+    } else {
+      if (
+        longScore >= minScore &&
+        longExhausted
+      ) {
+        reason =
+          "Bullish but late/extended — waiting for pullback";
+      } else if (
+        shortScore >= minScore &&
+        shortExhausted
+      ) {
+        reason =
+          "Bearish but late/extended — waiting for pullback";
+      } else if (
+        longScore >= minScore ||
+        shortScore >= minScore
+      ) {
+        reason =
+          "Indicators align but structure/entry timing is incomplete";
+      } else if (
+        !notChasing
+      ) {
+        reason =
+          "Entry rejected because price is extended";
+      }
+    }
+    async function sendNtfy(
+  env,
+  text
+) {
   const topic =
-    env.NTFY_TOPIC ||
-    env.NTFY_SUBSCRIPTION_TOPIC;
+    env.NTFY_TOPIC;
 
   if (!topic) {
     console.error(
-      "NTFY topic is not configured."
+      "NTFY_TOPIC is not configured"
     );
 
     return false;
   }
 
   try {
-    const response = await fetch(
-      `https://ntfy.sh/${encodeURIComponent(topic)}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Title": "Mobile Signal Bot V2",
-          "Priority": "default",
-          "Tags": "chart_with_upwards_trend"
-        },
-        body: message
-      }
-    );
+    const r =
+      await fetch(
+        `https://ntfy.sh/${encodeURIComponent(topic)}`,
+        {
+          method: "POST",
 
-    if (!response.ok) {
-      const body =
-        await response.text().catch(
-          () => ""
-        );
+          headers: {
+            "content-type":
+              "text/plain; charset=utf-8",
 
+            "Title":
+              "Mobile Signal Bot V2",
+
+            "Priority":
+              "high",
+
+            "Tags":
+              "chart_with_upwards_trend"
+          },
+
+          body: text
+        }
+      );
+
+    if (!r.ok) {
       console.error(
-        `NTFY HTTP ${response.status}: ${body}`
+        `ntfy HTTP ${r.status}`
       );
 
       return false;
     }
 
     return true;
+
   } catch (e) {
     console.error(
-      "NTFY request failed:",
+      "ntfy request failed:",
       e?.message || e
     );
 
     return false;
   }
 }
-  // Part 3 — keep this section at the very end of worker.js
 
-function safeNumber(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
+function formatAlert(s) {
+  const f =
+    n =>
+      n == null
+        ? "—"
+        : Number(n)
+            .toPrecision(8);
 
-function clamp(v, min, max) {
-  return Math.min(max, Math.max(min, v));
-}
+  return (
+    `${s.signal === "BUY" ? "🟢" : "🔴"} ` +
+    `${s.signal} — ${s.label}\n` +
 
-function qualityLabel(score) {
-  if (score >= 9) return "A+";
-  if (score >= 8) return "A";
-  return "WAIT";
-}
+    `15m + 1H confirmed\n` +
 
-function makeDashboardSummary(results) {
-  const buy = results.filter(
-    x => x.signal === "BUY"
+    `Score: ${s.score}/10\n` +
+
+    `Strategy: ${
+      s.strategy || "WAIT"
+    }\n\n` +
+
+    `Entry: ${f(s.entry)}\n` +
+    `SL: ${f(s.sl)}\n` +
+    `TP1: ${f(s.tp1)}\n` +
+    `TP2: ${f(s.tp2)}\n` +
+    `TP3: ${f(s.tp3)}\n\n` +
+
+    `15m RSI: ${
+      s.rsi?.toFixed(1)
+    }\n` +
+
+    `1H RSI: ${
+      s.htfRsi?.toFixed(1)
+    }\n\n` +
+
+    `Reason: ${
+      s.reason ||
+      "No additional reason"
+    }\n\n` +
+
+    `Strict bot: NO AUTO-TRADE`
   );
+}
 
-  const sell = results.filter(
-    x => x.signal === "SELL"
+function sleep(ms) {
+  return new Promise(
+    resolve =>
+      setTimeout(
+        resolve,
+        ms
+      )
   );
-
-  const waiting = results.filter(
-    x => x.signal === "NONE"
-  );
-
-  return {
-    total: results.length,
-    buy: buy.length,
-    sell: sell.length,
-    waiting: waiting.length,
-    bestBuy:
-      buy.sort(
-        (a, b) => b.score - a.score
-      )[0] || null,
-    bestSell:
-      sell.sort(
-        (a, b) => b.score - a.score
-      )[0] || null
-  };
 }
-
-function validateSignal(s) {
-  if (!s) return false;
-
-  if (
-    s.signal !== "BUY" &&
-    s.signal !== "SELL"
-  ) {
-    return false;
-  }
-
-  if (
-    !Number.isFinite(Number(s.score)) ||
-    Number(s.score) < 8
-  ) {
-    return false;
-  }
-
-  if (
-    !Number.isFinite(Number(s.price)) ||
-    Number(s.price) <= 0
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
-// Keep the public status endpoint useful without exposing secrets.
-async function getStatus(env) {
-  let heartbeat = null;
-
-  if (env.SIGNAL_STATE) {
-    try {
-      heartbeat =
-        await env.SIGNAL_STATE.get(
-          "heartbeat:last"
-        );
-    } catch (e) {
-      console.error(
-        "Status KV warning:",
-        e?.message || e
-      );
-    }
-  }
-
-  return {
-    ok: true,
-    bot: "Mobile Signal Bot V2",
-    mode: "SIGNAL_ONLY",
-    quality: "VANTIQ_STYLE",
-    minimumScore: Number(
-      env.MIN_SCORE || DEFAULT_MIN_SCORE
-    ),
-    heartbeatEveryMinutes: 30,
-    lastHeartbeat: heartbeat
-      ? new Date(
-          Number(heartbeat)
-        ).toISOString()
-      : null,
-    ntfyConfigured: Boolean(
-      env.NTFY_TOPIC ||
-      env.NTFY_SUBSCRIPTION_TOPIC
-    )
-  };
-}
-}
+    
