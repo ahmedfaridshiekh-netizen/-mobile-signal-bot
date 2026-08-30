@@ -1,6 +1,6 @@
 // Mobile Signal Bot V2 — Cloudflare Worker
 // Subrequest-safe rotating scanner.
-// NTFY setup is unchanged.
+// NTFY diagnostic build.
 //
 // Required secret: NTFY_TOPIC
 //
@@ -181,20 +181,26 @@ export default {
     }
 
     if (path === "/test") {
-      const ok =
+      const ntfyResult =
         await sendNtfy(
           env,
-          "🟢 Mobile Signal Bot V2 test notification"
+          "🟢 Mobile Signal Bot V2 test notification",
+          true
         );
 
       return new Response(
         JSON.stringify(
           {
-            ok,
+            ok:
+              ntfyResult.ok,
             ntfy:
-              ok
+              ntfyResult.ok
                 ? "sent"
-                : "failed"
+                : "failed",
+            ntfyStatus:
+              ntfyResult.status,
+            ntfyResponse:
+              ntfyResult.body
           },
           null,
           2
@@ -586,21 +592,19 @@ async function runScan(env) {
     item.symbol;
 
   try {
-    const [
-      candles15,
-      candles1h
-    ] = await Promise.all([
-      getKlines(
+    const candles15 =
+      await getKlines(
         symbol,
         "Min15",
         220
-      ),
-      getKlines(
+      );
+
+    const candles1h =
+      await getKlines(
         symbol,
         "Min60",
         220
-      )
-    ]);
+      );
 
     if (
       !candles15 ||
@@ -610,7 +614,8 @@ async function runScan(env) {
     ) {
       return {
         ...item,
-        signal: "NONE",
+        signal:
+          "NONE",
         score: 0,
         reason:
           "Insufficient market data"
@@ -627,7 +632,7 @@ async function runScan(env) {
         candles1h
       );
 
-    // Work only with CLOSED candles.
+    // Exclude currently forming candles.
     const x15 =
       c15.slice(0, -1);
 
@@ -640,7 +645,8 @@ async function runScan(env) {
     ) {
       return {
         ...item,
-        signal: "NONE",
+        signal:
+          "NONE",
         score: 0,
         reason:
           "Not enough closed candles"
@@ -800,21 +806,42 @@ async function runScan(env) {
       ];
 
     if (
-      !Number.isFinite(price) ||
-      !Number.isFinite(e20) ||
-      !Number.isFinite(e50) ||
-      !Number.isFinite(e200) ||
-      !Number.isFinite(h20) ||
-      !Number.isFinite(h50) ||
-      !Number.isFinite(h200) ||
-      !Number.isFinite(r15) ||
-      !Number.isFinite(r1) ||
-      !Number.isFinite(atr) ||
+      !Number.isFinite(
+        price
+      ) ||
+      !Number.isFinite(
+        e20
+      ) ||
+      !Number.isFinite(
+        e50
+      ) ||
+      !Number.isFinite(
+        e200
+      ) ||
+      !Number.isFinite(
+        h20
+      ) ||
+      !Number.isFinite(
+        h50
+      ) ||
+      !Number.isFinite(
+        h200
+      ) ||
+      !Number.isFinite(
+        r15
+      ) ||
+      !Number.isFinite(
+        r1
+      ) ||
+      !Number.isFinite(
+        atr
+      ) ||
       atr <= 0
     ) {
       return {
         ...item,
-        signal: "NONE",
+        signal:
+          "NONE",
         score: 0,
         reason:
           "Indicator data unavailable"
@@ -835,32 +862,44 @@ async function runScan(env) {
       );
 
     const bodyPct =
-      body / range;
+      body /
+      range;
 
     const distAtr =
       Math.abs(
-        price - e20
+        price -
+        e20
       ) /
       atr;
 
     const recent =
-      x15.slice(-20);
+      x15.slice(
+        -20
+      );
 
     const resistance =
       Math.max(
         ...recent
-          .slice(0, -1)
+          .slice(
+            0,
+            -1
+          )
           .map(
-            x => x.high
+            x =>
+              x.high
           )
       );
 
     const support =
       Math.min(
         ...recent
-          .slice(0, -1)
+          .slice(
+            0,
+            -1
+          )
           .map(
-            x => x.low
+            x =>
+              x.low
           )
       );
 
@@ -872,7 +911,8 @@ async function runScan(env) {
             -1
           )
           .map(
-            x => x.volume
+            x =>
+              x.volume
           ),
         20
       );
@@ -882,7 +922,8 @@ async function runScan(env) {
         volumeAvg
       ) &&
       last.volume >
-        volumeAvg * 1.05;
+        volumeAvg *
+          1.05;
 
     const bullish15 =
       e20 >
@@ -930,7 +971,8 @@ async function runScan(env) {
       last.close >
         e20 &&
       last.close >
-        prev.high * 0.997;
+        prev.high *
+          0.997;
 
     const pullbackShort =
       prev.high >=
@@ -938,7 +980,8 @@ async function runScan(env) {
       last.close <
         e20 &&
       last.close <
-        prev.low * 1.003;
+        prev.low *
+          1.003;
 
     const reclaimLong =
       prev.close <
@@ -961,23 +1004,28 @@ async function runScan(env) {
       support;
 
     const nearResistance =
-      (resistance -
-        price) /
+      (
+        resistance -
+        price
+      ) /
       atr;
 
     const nearSupport =
-      (price -
-        support) /
+      (
+        price -
+        support
+      ) /
       atr;
 
-    // Exhaustion protection.
     const longExhausted =
       distAtr >
         MAX_EMA20_DISTANCE_ATR ||
       bodyPct >
         MAX_BODY_PCT ||
-      r15 > 74 ||
-      r1 > 76 ||
+      r15 >
+        74 ||
+      r1 >
+        76 ||
       nearResistance <
         0.45;
 
@@ -986,28 +1034,45 @@ async function runScan(env) {
         MAX_EMA20_DISTANCE_ATR ||
       bodyPct >
         MAX_BODY_PCT ||
-      r15 < 26 ||
-      r1 < 24 ||
+      r15 <
+        26 ||
+      r1 <
+        24 ||
       nearSupport <
         0.45;
 
     const notChasing =
-      distAtr <= 2.0 &&
-      bodyPct <= 0.85;
+      distAtr <=
+        2.0 &&
+      bodyPct <=
+        0.85;
 
-    let longScore = 0;
-    let shortScore = 0;
+    let longScore =
+      0;
 
-    if (bullish1h)
+    let shortScore =
+      0;
+
+    if (
+      bullish1h
+    )
       longScore++;
 
-    if (bullish15)
+    if (
+      bullish15
+    )
       longScore++;
 
-    if (price > h200)
+    if (
+      price >
+      h200
+    )
       longScore++;
 
-    if (price > e200)
+    if (
+      price >
+      e200
+    )
       longScore++;
 
     if (
@@ -1022,10 +1087,14 @@ async function runScan(env) {
     )
       longScore++;
 
-    if (macdBull)
+    if (
+      macdBull
+    )
       longScore++;
 
-    if (volumeOk)
+    if (
+      volumeOk
+    )
       longScore++;
 
     if (
@@ -1034,19 +1103,31 @@ async function runScan(env) {
     )
       longScore++;
 
-    if (breakoutLong)
+    if (
+      breakoutLong
+    )
       longScore++;
 
-    if (bearish1h)
+    if (
+      bearish1h
+    )
       shortScore++;
 
-    if (bearish15)
+    if (
+      bearish15
+    )
       shortScore++;
 
-    if (price < h200)
+    if (
+      price <
+      h200
+    )
       shortScore++;
 
-    if (price < e200)
+    if (
+      price <
+      e200
+    )
       shortScore++;
 
     if (
@@ -1061,10 +1142,14 @@ async function runScan(env) {
     )
       shortScore++;
 
-    if (macdBear)
+    if (
+      macdBear
+    )
       shortScore++;
 
-    if (volumeOk)
+    if (
+      volumeOk
+    )
       shortScore++;
 
     if (
@@ -1073,10 +1158,11 @@ async function runScan(env) {
     )
       shortScore++;
 
-    if (breakoutShort)
+    if (
+      breakoutShort
+    )
       shortScore++;
 
-    // Structure confirmation.
     const longStructure =
       bullish1h &&
       bullish15 &&
@@ -1108,7 +1194,8 @@ async function runScan(env) {
     let signal =
       "NONE";
 
-    let score = 0;
+    let score =
+      0;
 
     let reason =
       "No high-quality setup";
@@ -1211,38 +1298,47 @@ async function runScan(env) {
       price;
 
     const risk =
-      atr * 1.5;
+      atr *
+      1.5;
 
     const sl =
       signal === "BUY"
-        ? entry - risk
+        ? entry -
+          risk
         : signal === "SELL"
-          ? entry + risk
+          ? entry +
+            risk
           : null;
 
     const tp1 =
       signal === "BUY"
-        ? entry + risk
+        ? entry +
+          risk
         : signal === "SELL"
-          ? entry - risk
+          ? entry -
+            risk
           : null;
 
     const tp2 =
       signal === "BUY"
         ? entry +
-          risk * 2
+          risk *
+            2
         : signal === "SELL"
           ? entry -
-            risk * 2
+            risk *
+              2
           : null;
 
     const tp3 =
       signal === "BUY"
         ? entry +
-          risk * 3
+          risk *
+            3
         : signal === "SELL"
           ? entry -
-            risk * 3
+            risk *
+              3
           : null;
 
     return {
@@ -1250,20 +1346,16 @@ async function runScan(env) {
 
       symbol,
 
-      label:
-        item.label,
-
-      category:
-        item.category,
-
       price,
 
       signal,
 
       score:
-        signal === "BUY"
+        signal ===
+        "BUY"
           ? longScore
-          : signal === "SELL"
+          : signal ===
+            "SELL"
             ? shortScore
             : Math.max(
                 longScore,
@@ -1370,9 +1462,11 @@ async function runScan(env) {
         "NONE",
       score: 0,
       reason:
-        `Scanner error: ${String(
-          e?.message || e
-        )}`
+        `Scanner error: ${
+          String(
+            e?.message || e
+          )
+        }`
     };
   }
 }async function getKlines(
@@ -1424,11 +1518,6 @@ async function runScan(env) {
     );
   }
 
-  /*
-   * MEXC can return the kline arrays in either
-   * object form or array form depending on endpoint
-   * version.
-   */
   if (
     Array.isArray(d)
   ) {
@@ -1485,7 +1574,8 @@ async function runScan(env) {
         d.vol.length
       );
 
-    const rows = [];
+    const rows =
+      [];
 
     for (
       let i = 0;
@@ -1637,7 +1727,8 @@ function ema(
 
   out[
     period - 1
-  ] = prev;
+  ] =
+    prev;
 
   const k =
     2 /
@@ -2031,9 +2122,47 @@ function round(
   );
 }
 
-async function sendNtfy(
+function formatPrice(
+  value
+) {
+  if (
+    value ===
+      null ||
+    value ===
+      undefined ||
+    !Number.isFinite(
+      Number(value)
+    )
+  ) {
+    return "N/A";
+  }
+
+  const n =
+    Number(value);
+
+  if (
+    n >= 1000
+  ) {
+    return n.toFixed(
+      2
+    );
+  }
+
+  if (
+    n >= 1
+  ) {
+    return n.toFixed(
+      4
+    );
+  }
+
+  return n.toFixed(
+    6
+  );
+}async function sendNtfy(
   env,
-  message
+  message,
+  diagnosticMode = false
 ) {
   if (
     !env.NTFY_TOPIC
@@ -2041,6 +2170,17 @@ async function sendNtfy(
     console.error(
       "NTFY_TOPIC secret missing"
     );
+
+    if (
+      diagnosticMode
+    ) {
+      return {
+        ok: false,
+        status: null,
+        body:
+          "NTFY_TOPIC secret missing"
+      };
+    }
 
     return false;
   }
@@ -2076,19 +2216,41 @@ async function sendNtfy(
         }
       );
 
+    const body =
+      await response.text();
+
     if (
       !response.ok
     ) {
-      const body =
-        await response.text();
-
       console.error(
         "NTFY failed:",
         response.status,
         body
       );
 
+      if (
+        diagnosticMode
+      ) {
+        return {
+          ok: false,
+          status:
+            response.status,
+          body
+        };
+      }
+
       return false;
+    }
+
+    if (
+      diagnosticMode
+    ) {
+      return {
+        ok: true,
+        status:
+          response.status,
+        body
+      };
     }
 
     return true;
@@ -2099,6 +2261,19 @@ async function sendNtfy(
       "NTFY exception:",
       e?.message || e
     );
+
+    if (
+      diagnosticMode
+    ) {
+      return {
+        ok: false,
+        status: null,
+        body:
+          String(
+            e?.message || e
+          )
+      };
+    }
 
     return false;
   }
@@ -2154,45 +2329,6 @@ function formatAlert(
   );
 }
 
-function formatPrice(
-  value
-) {
-  if (
-    value ===
-      null ||
-    value ===
-      undefined ||
-    !Number.isFinite(
-      Number(value)
-    )
-  ) {
-    return "N/A";
-  }
-
-  const n =
-    Number(value);
-
-  if (
-    n >= 1000
-  ) {
-    return n.toFixed(
-      2
-    );
-  }
-
-  if (
-    n >= 1
-  ) {
-    return n.toFixed(
-      4
-    );
-  }
-
-  return n.toFixed(
-    6
-  );
-}
-
 async function getStatus(
   env
 ) {
@@ -2242,258 +2378,4 @@ async function getStatus(
     timestamp:
       new Date().toISOString()
   };
-}function isFiniteNumber(
-  value
-) {
-  return Number.isFinite(
-    Number(value)
-  );
 }
-
-function safeNumber(
-  value,
-  fallback = 0
-) {
-  const n =
-    Number(value);
-
-  return Number.isFinite(n)
-    ? n
-    : fallback;
-}
-
-function lastValue(
-  values
-) {
-  if (
-    !Array.isArray(values) ||
-    !values.length
-  ) {
-    return null;
-  }
-
-  return values[
-    values.length - 1
-  ];
-}
-
-function clamp(
-  value,
-  min,
-  max
-) {
-  return Math.min(
-    max,
-    Math.max(
-      min,
-      value
-    )
-  );
-}
-
-/*
- * Small diagnostic helper.
- * It does not affect signal scoring.
- */
-function diagnostic(
-  label,
-  value
-) {
-  try {
-    console.log(
-      `[V2] ${label}:`,
-      value
-    );
-  } catch (_) {}
-}
-
-/*
- * Keep the worker alive only through the
- * scheduled event / request lifecycle.
- *
- * No permanent loop is used here.
- */
-function heartbeatDescription() {
-  return {
-    interval:
-      HEARTBEAT_MS,
-
-    minutes:
-      HEARTBEAT_MS /
-      60000,
-
-    message:
-      "Mobile Signal Bot V2 is ALIVE"
-  };
-}
-
-/*
- * Final safety wrapper for JSON output.
- */
-function jsonResponse(
-  payload,
-  status = 200
-) {
-  return new Response(
-    JSON.stringify(
-      payload,
-      null,
-      2
-    ),
-    {
-      status,
-
-      headers: {
-        "content-type":
-          "application/json; charset=utf-8",
-
-        "cache-control":
-          "no-store"
-      }
-    }
-  );
-}
-
-/*
- * The functions below intentionally do not
- * create another scanning loop.
- *
- * Cloudflare Cron calls scheduled(), which
- * calls runScan(). The heartbeat is persisted
- * in KV, so multiple invocations cannot spam
- * ntfy more than once per 30 minutes.
- */
-
-function getHeartbeatInfo(
-  timestamp
-) {
-  const ts =
-    Number(timestamp);
-
-  if (
-    !Number.isFinite(ts) ||
-    ts <= 0
-  ) {
-    return {
-      valid: false,
-      ageMs: null
-    };
-  }
-
-  return {
-    valid: true,
-
-    ageMs:
-      Math.max(
-        0,
-        Date.now() -
-          ts
-      ),
-
-    ageMinutes:
-      Math.max(
-        0,
-        (
-          Date.now() -
-          ts
-        ) / 60000
-      )
-  };
-}
-
-/*
- * Optional diagnostic endpoint.
- *
- * /heartbeat
- *
- * This does not send a notification.
- * It only reports the stored heartbeat
- * timestamp and configured interval.
- */
-async function heartbeatStatus(
-  env
-) {
-  let stored =
-    null;
-
-  if (
-    env.SIGNAL_STATE
-  ) {
-    try {
-      stored =
-        await env.SIGNAL_STATE.get(
-          HEARTBEAT_KEY
-        );
-    } catch (e) {
-      console.error(
-        "KV heartbeat status warning:",
-        e?.message || e
-      );
-    }
-  }
-
-  return {
-    ok: true,
-
-    heartbeat:
-      heartbeatDescription(),
-
-    lastHeartbeat:
-      stored,
-
-    info:
-      getHeartbeatInfo(
-        stored
-      ),
-
-    timestamp:
-      new Date().toISOString()
-  };
-}
-
-/*
- * Replace the default fetch handler only
- * for the diagnostic heartbeat route.
- *
- * This wrapper is intentionally kept separate
- * so the scanner itself remains unchanged.
- */
-const originalFetch =
-  globalThis.__MOBILE_SIGNAL_BOT_V2_FETCH__;
-
-if (
-  !originalFetch
-) {
-  globalThis.__MOBILE_SIGNAL_BOT_V2_FETCH__ =
-    true;
-}
-
-/*
- * IMPORTANT:
- * The worker's default export is declared in
- * Part 1. The /heartbeat endpoint is therefore
- * handled by adding it inside that fetch handler
- * if you want to inspect heartbeat status.
- *
- * The normal production flow requires no
- * permanent timer and no setInterval().
- */
-
-/*
- * Final constants sanity check.
- */
-diagnostic(
-  "Heartbeat interval minutes",
-  HEARTBEAT_MS /
-    60000
-);
-
-diagnostic(
-  "Scan batch size",
-  SCAN_BATCH_SIZE
-);
-
-diagnostic(
-  "Default minimum score",
-  DEFAULT_MIN_SCORE
-);
