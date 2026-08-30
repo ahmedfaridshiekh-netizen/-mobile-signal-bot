@@ -1,148 +1,296 @@
 // Mobile Signal Bot V2 — Cloudflare Worker
-// Clean final version
-// Rotating scanner + NTFY alerts + no-setup reasons + heartbeat
+// Subrequest-safe rotating scanner.
+// NTFY setup is unchanged.
+//
+// Required secret: NTFY_TOPIC
+//
+// Optional:
+// MIN_SCORE (default 8)
+//
+// KV binding:
+// SIGNAL_STATE
 
 const CRYPTO_BASES = [
-  "BTC","ETH","BNB","SOL","XRP","DOGE","ADA","AVAX","LINK","DOT",
-  "SUI","LTC","BCH","UNI","NEAR","APT","FIL","ATOM","ARB","OP",
-  "INJ","SEI","TIA","PEPE","WIF","ZEC","JELLYJELLY","TAO","RENDER","ICP"
+  "BTC",
+  "ETH",
+  "BNB",
+  "SOL",
+  "XRP",
+  "DOGE",
+  "ADA",
+  "AVAX",
+  "LINK",
+  "DOT",
+  "SUI",
+  "LTC",
+  "BCH",
+  "ETC",
+  "FIL",
+  "ATOM",
+  "NEAR",
+  "APT",
+  "ARB",
+  "OP",
+  "INJ",
+  "SEI",
+  "TIA",
+  "TRX",
+  "HBAR",
+  "PEPE",
+  "WIF",
+  "BONK",
+  "FLOKI",
+  "SHIB",
+  "MATIC",
+  "UNI",
+  "AAVE"
 ];
 
-const COMMODITIES = [
-  { base: "GOLD(XAU)", label: "GOLD" },
-  { base: "SILVER(XAG)", label: "SILVER" },
-  { base: "OIL(BRENT)", label: "BRENT" }
-];
+const COMMODITIES = [];
 
-const MEXC = "https://contract.mexc.com";
-const DEFAULT_MIN_SCORE = 7;
+const MEXC =
+  "https://contract.mexc.com";
+
+const DEFAULT_MIN_SCORE = 8;
+
 const SCAN_BATCH_SIZE = 12;
 
-const HEARTBEAT_MS = 30 * 60 * 1000;
-const HEARTBEAT_KEY = "heartbeat:last";
+const HEARTBEAT_MS =
+  30 * 60 * 1000;
 
-const STATIC_SYMBOLS = Object.fromEntries(
-  CRYPTO_BASES.map(base => [base, `${base}_USDT`])
-);
+const MAX_EMA20_DISTANCE_ATR =
+  1.25;
 
+const MAX_BODY_PCT =
+  0.70;
+
+const STATIC_SYMBOLS =
+  Object.fromEntries(
+    CRYPTO_BASES.map(
+      base => [
+        base,
+        `${base}_USDT`
+      ]
+    )
+  );
+
+// Commodities are optional because
+// their MEXC contract names can change.
 const COMMODITY_CANDIDATES = {
-  GOLD: ["GOLD_USDT", "XAU_USDT"],
-  SILVER: ["SILVER_USDT", "XAG_USDT"],
-  BRENT: ["BRENT_USDT", "OIL_USDT"]
+  GOLD: [
+    "GOLD_USDT",
+    "XAU_USDT"
+  ],
+  SILVER: [
+    "SILVER_USDT",
+    "XAG_USDT"
+  ]
 };
 
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
+const HEARTBEAT_KEY =
+  "heartbeat:last";
 
-    if (url.pathname === "/") {
+export default {
+  async fetch(
+    request,
+    env,
+    ctx
+  ) {
+    const url =
+      new URL(request.url);
+
+    const path =
+      url.pathname;
+
+    if (path === "/") {
       return new Response(
-        JSON.stringify({
-          name: "Mobile Signal Bot V2",
-          status: "online",
-          message:
-            "Rotating scanner runs on Cloudflare Cron. Signals are sent to ntfy.",
-          batchSize: SCAN_BATCH_SIZE,
-          heartbeatMinutes: 30
-        }, null, 2),
+        JSON.stringify(
+          {
+            name:
+              "Mobile Signal Bot V2",
+            status:
+              "online",
+            message:
+              "VANTIQ-quality rotating scanner with ntfy heartbeat.",
+            batchSize:
+              SCAN_BATCH_SIZE,
+            watchlist: {
+              crypto:
+                CRYPTO_BASES,
+              commodities:
+                COMMODITIES.map(
+                  x => x.label
+                )
+            },
+            minScore:
+              Number(
+                env.MIN_SCORE ||
+                DEFAULT_MIN_SCORE
+              )
+          },
+          null,
+          2
+        ),
         {
           headers: {
-            "content-type": "application/json"
+            "content-type":
+              "application/json"
           }
         }
       );
     }
 
-    if (url.pathname === "/test") {
-      const ok = await sendNtfy(
-        env,
-        "🧪 Mobile Signal Bot V2 test\nntfy alerts are connected."
-      );
-
-      return new Response(
-        ok
-          ? "ntfy test notification sent."
-          : "ntfy test failed.",
-        {
-          status: ok ? 200 : 502
-        }
-      );
-    }
-
-    if (url.pathname === "/scan") {
+    if (path === "/scan") {
       try {
-        const result = await runScan(env);
+        const result =
+          await runScan(env);
 
         return new Response(
-          JSON.stringify(result, null, 2),
+          JSON.stringify(
+            result,
+            null,
+            2
+          ),
           {
             headers: {
-              "content-type": "application/json"
+              "content-type":
+                "application/json"
             }
           }
         );
       } catch (e) {
         return new Response(
-          JSON.stringify({
-            ok: false,
-            error: String(e?.message || e)
-          }),
+          JSON.stringify(
+            {
+              ok: false,
+              error:
+                String(
+                  e?.message || e
+                )
+            }
+          ),
           {
             status: 500,
             headers: {
-              "content-type": "application/json"
+              "content-type":
+                "application/json"
             }
           }
         );
       }
     }
 
-    return new Response("Not found", {
-      status: 404
-    });
+    if (path === "/test") {
+      const ok =
+        await sendNtfy(
+          env,
+          "🟢 Mobile Signal Bot V2 test notification"
+        );
+
+      return new Response(
+        JSON.stringify(
+          {
+            ok,
+            ntfy:
+              ok
+                ? "sent"
+                : "failed"
+          },
+          null,
+          2
+        ),
+        {
+          headers: {
+            "content-type":
+              "application/json"
+          }
+        }
+      );
+    }
+
+    if (path === "/status") {
+      return new Response(
+        JSON.stringify(
+          await getStatus(env),
+          null,
+          2
+        ),
+        {
+          headers: {
+            "content-type":
+              "application/json"
+          }
+        }
+      );
+    }
+
+    return new Response(
+      "Not found",
+      {
+        status: 404
+      }
+    );
   },
 
-  async scheduled(controller, env, ctx) {
+  async scheduled(
+    event,
+    env,
+    ctx
+  ) {
     ctx.waitUntil(
-      runScan(env).catch(e =>
-        console.error(
-          "CRON scan failed:",
-          e
-        )
-      )
+      runScan(env)
     );
   }
 };
 
 function buildWatchlist() {
-  const wanted = CRYPTO_BASES.map(base => ({
-    symbol: STATIC_SYMBOLS[base],
-    label: base,
-    category: "CRYPTO"
-  }));
+  const wanted =
+    CRYPTO_BASES.map(
+      base => ({
+        symbol:
+          STATIC_SYMBOLS[base],
+        label:
+          base,
+        category:
+          "CRYPTO"
+      })
+    );
 
-  for (const item of COMMODITIES) {
+  for (
+    const item of COMMODITIES
+  ) {
     const candidates =
-      COMMODITY_CANDIDATES[item.label] || [];
+      COMMODITY_CANDIDATES[
+        item.label
+      ] || [];
 
-    if (candidates.length) {
-      wanted.push({
-        symbol: candidates[0],
-        label: item.label,
-        category: "COMMODITY",
-        candidates
-      });
-    }
+    wanted.push({
+      symbol:
+        candidates[0] ||
+        `${item.label}_USDT`,
+      label:
+        item.label,
+      category:
+        "COMMODITY"
+    });
   }
 
   return wanted;
 }
 
-async function getRotationIndex(env, total) {
+async function getRotationIndex(
+  env,
+  total
+) {
   const slot =
-    Math.floor(Date.now() / 300000);
+    Math.floor(
+      Date.now() / 60000
+    );
 
-  if (!env.SIGNAL_STATE) {
+  if (
+    !env.SIGNAL_STATE ||
+    !total
+  ) {
     return slot % total;
   }
 
@@ -163,13 +311,13 @@ async function getRotationIndex(env, total) {
     await env.SIGNAL_STATE.put(
       "scan:cursor",
       String(
-        (idx + SCAN_BATCH_SIZE) %
+        (idx +
+          SCAN_BATCH_SIZE) %
           total
       )
     );
 
     return idx % total;
-
   } catch (e) {
     console.error(
       "KV cursor warning:",
@@ -188,10 +336,7 @@ function selectBatch(
 
   for (
     let i = 0;
-    i < Math.min(
-      SCAN_BATCH_SIZE,
-      wanted.length
-    );
+    i < SCAN_BATCH_SIZE;
     i++
   ) {
     out.push(
@@ -229,6 +374,9 @@ async function runScan(env) {
 
   const results = [];
 
+  // Process in groups of 6.
+  // Each symbol makes exactly 2 MEXC requests:
+  // 15m + 1H.
   for (
     let i = 0;
     i < batch.length;
@@ -240,27 +388,21 @@ async function runScan(env) {
         i + 6
       );
 
-    const chunkResults =
+    const part =
       await Promise.all(
-        chunk.map(x =>
-          scanSymbol(
-            x,
-            env,
-            minScore
-          )
+        chunk.map(
+          item =>
+            scanSymbol(
+              item,
+              env,
+              minScore
+            )
         )
       );
 
     results.push(
-      ...chunkResults
+      ...part
     );
-
-    if (
-      i + 6 <
-      batch.length
-    ) {
-      await sleep(150);
-    }
   }
 
   const alerts =
@@ -270,30 +412,31 @@ async function runScan(env) {
         x.signal === "SELL"
     );
 
-  const sent = [];
-
   const noSetupReasons =
     results
       .filter(
         x =>
-          x.signal !== "BUY" &&
-          x.signal !== "SELL"
+          x.signal === "NONE"
       )
       .map(
         x =>
-          `${x.label || x.symbol}: ${
-            x.reason ||
-            "No valid setup"
-          }`
+          `${x.label}: ${x.reason}`
       );
 
-  for (const s of alerts) {
+  const sent = [];
+
+  for (
+    const s of alerts
+  ) {
     const key =
       `state:${s.symbol}`;
 
-    let previous = null;
+    let previous =
+      null;
 
-    if (env.SIGNAL_STATE) {
+    if (
+      env.SIGNAL_STATE
+    ) {
       try {
         previous =
           await env.SIGNAL_STATE.get(
@@ -301,14 +444,17 @@ async function runScan(env) {
           );
       } catch (e) {
         console.error(
-          `KV read warning ${s.symbol}:`,
+          "KV signal read warning:",
           e?.message || e
         );
       }
     }
 
+    // Only a genuine direction change
+    // creates a notification.
     if (
-      previous !== s.signal
+      previous !==
+      s.signal
     ) {
       const ok =
         await sendNtfy(
@@ -316,38 +462,42 @@ async function runScan(env) {
           formatAlert(s)
         );
 
-      if (
-        ok &&
-        env.SIGNAL_STATE
-      ) {
-        try {
-          await env.SIGNAL_STATE.put(
-            key,
-            s.signal
-          );
-        } catch (e) {
-          console.error(
-            `KV write warning ${s.symbol}:`,
-            e?.message || e
-          );
-        }
-      }
-
       if (ok) {
         sent.push(
           s.symbol
         );
+
+        if (
+          env.SIGNAL_STATE
+        ) {
+          try {
+            await env.SIGNAL_STATE.put(
+              key,
+              s.signal
+            );
+          } catch (e) {
+            console.error(
+              "KV signal write warning:",
+              e?.message || e
+            );
+          }
+        }
       }
     }
   }
 
-  // Reliable 30-minute heartbeat.
+  let heartbeatSent =
+    false;
+
   const now =
     Date.now();
 
-  let lastHeartbeat = 0;
+  let lastHeartbeat =
+    0;
 
-  if (env.SIGNAL_STATE) {
+  if (
+    env.SIGNAL_STATE
+  ) {
     try {
       lastHeartbeat =
         Number(
@@ -363,32 +513,18 @@ async function runScan(env) {
     }
   }
 
-  let heartbeatSent = false;
-
+  // ALWAYS send an ALIVE message
+  // every 30 minutes, regardless of
+  // whether a signal was found.
   if (
-    alerts.length === 0 &&
-    now - lastHeartbeat >=
-      HEARTBEAT_MS
+    now -
+      lastHeartbeat >=
+    HEARTBEAT_MS
   ) {
-    const uniqueReasons =
-      [
-        ...new Set(
-          noSetupReasons
-        )
-      ];
-
-    const sample =
-      uniqueReasons
-        .slice(0, 3)
-        .join("\n");
-
     const message =
-      "🔎 Bot is searching for the best setup for you... ❤️\n" +
-      "No valid setup detected yet.\n\n" +
-      (
-        sample ||
-        "Market conditions are being monitored."
-      );
+      "🟢 Mobile Signal Bot V2 is ALIVE\n" +
+      "🔎 Scanner is running normally.\n" +
+      "No action is required.";
 
     heartbeatSent =
       await sendNtfy(
@@ -416,7 +552,8 @@ async function runScan(env) {
 
   return {
     ok: true,
-    scanned: batch.length,
+    scanned:
+      batch.length,
     totalWatchlist:
       wanted.length,
     rotationStart:
@@ -425,7 +562,8 @@ async function runScan(env) {
       (
         start +
         SCAN_BATCH_SIZE
-      ) % wanted.length,
+      ) %
+      wanted.length,
     signals:
       alerts,
     noSetupReasons:
@@ -448,19 +586,21 @@ async function runScan(env) {
     item.symbol;
 
   try {
-    const candles15 =
-      await getKlines(
+    const [
+      candles15,
+      candles1h
+    ] = await Promise.all([
+      getKlines(
         symbol,
         "Min15",
         220
-      );
-
-    const candles1h =
-      await getKlines(
+      ),
+      getKlines(
         symbol,
         "Min60",
         220
-      );
+      )
+    ]);
 
     if (
       !candles15 ||
@@ -477,217 +617,518 @@ async function runScan(env) {
       };
     }
 
-    const a15 =
-      analyze(candles15);
-
-    const a1h =
-      analyze(candles1h);
-
-    const longScore =
-      (a15.close >
-        a15.ema200 ? 1 : 0) +
-
-      (a15.ema20 >
-        a15.ema50 ? 1 : 0) +
-
-      (a1h.close >
-        a1h.ema200 ? 1 : 0) +
-
-      (a1h.ema20 >
-        a1h.ema50 ? 1 : 0) +
-
-      (
-        a15.rsi >= 52 &&
-        a15.rsi <= 72
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.macd >
-          a15.macdSignal &&
-        a15.hist > 0
-          ? 1
-          : 0
-      ) +
-
-      (
-        a1h.hist > 0
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.volume >
-          a15.volumeSma * 1.05
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.breakUp ||
-        a15.reclaimUp
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.close >
-          a15.open
-          ? 1
-          : 0
+    const c15 =
+      normalizeCandles(
+        candles15
       );
 
-    const shortScore =
-      (a15.close <
-        a15.ema200 ? 1 : 0) +
-
-      (a15.ema20 <
-        a15.ema50 ? 1 : 0) +
-
-      (a1h.close <
-        a1h.ema200 ? 1 : 0) +
-
-      (a1h.ema20 <
-        a1h.ema50 ? 1 : 0) +
-
-      (
-        a15.rsi >= 28 &&
-        a15.rsi <= 48
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.macd <
-          a15.macdSignal &&
-        a15.hist < 0
-          ? 1
-          : 0
-      ) +
-
-      (
-        a1h.hist < 0
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.volume >
-          a15.volumeSma * 1.05
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.breakDown ||
-        a15.reclaimDown
-          ? 1
-          : 0
-      ) +
-
-      (
-        a15.close <
-          a15.open
-          ? 1
-          : 0
+    const c1h =
+      normalizeCandles(
+        candles1h
       );
 
+    // Work only with CLOSED candles.
+    const x15 =
+      c15.slice(0, -1);
+
+    const x1h =
+      c1h.slice(0, -1);
+
+    if (
+      x15.length < 205 ||
+      x1h.length < 205
+    ) {
+      return {
+        ...item,
+        signal: "NONE",
+        score: 0,
+        reason:
+          "Not enough closed candles"
+      };
+    }
+
+    const close15 =
+      x15.map(
+        x => x.close
+      );
+
+    const close1h =
+      x1h.map(
+        x => x.close
+      );
+
+    const ema20_15 =
+      ema(
+        close15,
+        20
+      );
+
+    const ema50_15 =
+      ema(
+        close15,
+        50
+      );
+
+    const ema200_15 =
+      ema(
+        close15,
+        200
+      );
+
+    const ema20_1h =
+      ema(
+        close1h,
+        20
+      );
+
+    const ema50_1h =
+      ema(
+        close1h,
+        50
+      );
+
+    const ema200_1h =
+      ema(
+        close1h,
+        200
+      );
+
+    const rsi15 =
+      RSI(
+        close15,
+        14
+      );
+
+    const rsi1h =
+      RSI(
+        close1h,
+        14
+      );
+
+    const macd15 =
+      MACD(
+        close15
+      );
+
+    const macd1h =
+      MACD(
+        close1h
+      );
+
+    const atr15 =
+      ATR(
+        x15,
+        14
+      );
+
+    const last =
+      x15[
+        x15.length - 1
+      ];
+
+    const prev =
+      x15[
+        x15.length - 2
+      ];
+
+    const price =
+      last.close;
+
+    const e20 =
+      ema20_15[
+        ema20_15.length - 1
+      ];
+
+    const e50 =
+      ema50_15[
+        ema50_15.length - 1
+      ];
+
+    const e200 =
+      ema200_15[
+        ema200_15.length - 1
+      ];
+
+    const h20 =
+      ema20_1h[
+        ema20_1h.length - 1
+      ];
+
+    const h50 =
+      ema50_1h[
+        ema50_1h.length - 1
+      ];
+
+    const h200 =
+      ema200_1h[
+        ema200_1h.length - 1
+      ];
+
+    const r15 =
+      rsi15[
+        rsi15.length - 1
+      ];
+
+    const r1 =
+      rsi1h[
+        rsi1h.length - 1
+      ];
+
+    const m15 =
+      macd15[
+        macd15.length - 1
+      ];
+
+    const pm15 =
+      macd15[
+        macd15.length - 2
+      ];
+
+    const m1 =
+      macd1h[
+        macd1h.length - 1
+      ];
+
+    const pm1 =
+      macd1h[
+        macd1h.length - 2
+      ];
+
+    const atr =
+      atr15[
+        atr15.length - 1
+      ];
+
+    if (
+      !Number.isFinite(price) ||
+      !Number.isFinite(e20) ||
+      !Number.isFinite(e50) ||
+      !Number.isFinite(e200) ||
+      !Number.isFinite(h20) ||
+      !Number.isFinite(h50) ||
+      !Number.isFinite(h200) ||
+      !Number.isFinite(r15) ||
+      !Number.isFinite(r1) ||
+      !Number.isFinite(atr) ||
+      atr <= 0
+    ) {
+      return {
+        ...item,
+        signal: "NONE",
+        score: 0,
+        reason:
+          "Indicator data unavailable"
+      };
+    }
+
+    const body =
+      Math.abs(
+        last.close -
+        last.open
+      );
+
+    const range =
+      Math.max(
+        last.high -
+          last.low,
+        Number.EPSILON
+      );
+
+    const bodyPct =
+      body / range;
+
+    const distAtr =
+      Math.abs(
+        price - e20
+      ) /
+      atr;
+
+    const recent =
+      x15.slice(-20);
+
+    const resistance =
+      Math.max(
+        ...recent
+          .slice(0, -1)
+          .map(
+            x => x.high
+          )
+      );
+
+    const support =
+      Math.min(
+        ...recent
+          .slice(0, -1)
+          .map(
+            x => x.low
+          )
+      );
+
+    const volumeAvg =
+      SMA(
+        x15
+          .slice(
+            -21,
+            -1
+          )
+          .map(
+            x => x.volume
+          ),
+        20
+      );
+
+    const volumeOk =
+      Number.isFinite(
+        volumeAvg
+      ) &&
+      last.volume >
+        volumeAvg * 1.05;
+
+    const bullish15 =
+      e20 >
+        e50 &&
+      e50 >
+        e200;
+
+    const bearish15 =
+      e20 <
+        e50 &&
+      e50 <
+        e200;
+
+    const bullish1h =
+      h20 >
+        h50 &&
+      h50 >
+        h200;
+
+    const bearish1h =
+      h20 <
+        h50 &&
+      h50 <
+        h200;
+
+    const macdBull =
+      m15.hist > 0 &&
+      m15.hist >=
+        pm15.hist &&
+      m1.hist > 0 &&
+      m1.hist >=
+        pm1.hist;
+
+    const macdBear =
+      m15.hist < 0 &&
+      m15.hist <=
+        pm15.hist &&
+      m1.hist < 0 &&
+      m1.hist <=
+        pm1.hist;
+
+    const pullbackLong =
+      prev.low <=
+        e20 * 1.003 &&
+      last.close >
+        e20 &&
+      last.close >
+        prev.high * 0.997;
+
+    const pullbackShort =
+      prev.high >=
+        e20 * 0.997 &&
+      last.close <
+        e20 &&
+      last.close <
+        prev.low * 1.003;
+
+    const reclaimLong =
+      prev.close <
+        e20 &&
+      last.close >
+        e20;
+
+    const reclaimShort =
+      prev.close >
+        e20 &&
+      last.close <
+        e20;
+
+    const breakoutLong =
+      last.close >
+      resistance;
+
+    const breakoutShort =
+      last.close <
+      support;
+
+    const nearResistance =
+      (resistance -
+        price) /
+      atr;
+
+    const nearSupport =
+      (price -
+        support) /
+      atr;
+
+    // Exhaustion protection.
+    const longExhausted =
+      distAtr >
+        MAX_EMA20_DISTANCE_ATR ||
+      bodyPct >
+        MAX_BODY_PCT ||
+      r15 > 74 ||
+      r1 > 76 ||
+      nearResistance <
+        0.45;
+
+    const shortExhausted =
+      distAtr >
+        MAX_EMA20_DISTANCE_ATR ||
+      bodyPct >
+        MAX_BODY_PCT ||
+      r15 < 26 ||
+      r1 < 24 ||
+      nearSupport <
+        0.45;
+
+    const notChasing =
+      distAtr <= 2.0 &&
+      bodyPct <= 0.85;
+
+    let longScore = 0;
+    let shortScore = 0;
+
+    if (bullish1h)
+      longScore++;
+
+    if (bullish15)
+      longScore++;
+
+    if (price > h200)
+      longScore++;
+
+    if (price > e200)
+      longScore++;
+
+    if (
+      r15 >= 50 &&
+      r15 <= 68
+    )
+      longScore++;
+
+    if (
+      r1 >= 48 &&
+      r1 <= 70
+    )
+      longScore++;
+
+    if (macdBull)
+      longScore++;
+
+    if (volumeOk)
+      longScore++;
+
+    if (
+      pullbackLong ||
+      reclaimLong
+    )
+      longScore++;
+
+    if (breakoutLong)
+      longScore++;
+
+    if (bearish1h)
+      shortScore++;
+
+    if (bearish15)
+      shortScore++;
+
+    if (price < h200)
+      shortScore++;
+
+    if (price < e200)
+      shortScore++;
+
+    if (
+      r15 >= 32 &&
+      r15 <= 50
+    )
+      shortScore++;
+
+    if (
+      r1 >= 30 &&
+      r1 <= 52
+    )
+      shortScore++;
+
+    if (macdBear)
+      shortScore++;
+
+    if (volumeOk)
+      shortScore++;
+
+    if (
+      pullbackShort ||
+      reclaimShort
+    )
+      shortScore++;
+
+    if (breakoutShort)
+      shortScore++;
+
+    // Structure confirmation.
     const longStructure =
-      a15.close >
-        a15.ema200 &&
-      a15.ema20 >
-        a15.ema50 &&
+      bullish1h &&
+      bullish15 &&
       (
-        a15.breakUp ||
-        a15.reclaimUp
+        pullbackLong ||
+        reclaimLong ||
+        breakoutLong
       );
 
     const shortStructure =
-      a15.close <
-        a15.ema200 &&
-      a15.ema20 <
-        a15.ema50 &&
+      bearish1h &&
+      bearish15 &&
       (
-        a15.breakDown ||
-        a15.reclaimDown
+        pullbackShort ||
+        reclaimShort ||
+        breakoutShort
       );
 
     const longMomentum =
-      a15.rsi >= 52 &&
-      a15.rsi <= 72 &&
-      a15.macd >
-        a15.macdSignal &&
-      a15.hist > 0 &&
-      a1h.hist > 0;
+      macdBull &&
+      r15 >= 50 &&
+      r15 <= 70;
 
     const shortMomentum =
-      a15.rsi >= 28 &&
-      a15.rsi <= 48 &&
-      a15.macd <
-        a15.macdSignal &&
-      a15.hist < 0 &&
-      a1h.hist < 0;
+      macdBear &&
+      r15 >= 30 &&
+      r15 <= 50;
 
-    const pullbackLong =
-      a15.low <=
-        a15.ema20 &&
-      a15.close >
-        a15.ema20;
+    let signal =
+      "NONE";
 
-    const reclaimLong =
-      a15.reclaimUp;
-
-    const pullbackShort =
-      a15.high >=
-        a15.ema20 &&
-      a15.close <
-        a15.ema20;
-
-    const reclaimShort =
-      a15.reclaimDown;
-
-    const notChasing =
-      Math.abs(
-        a15.close -
-        a15.ema20
-      ) /
-      Math.max(
-        a15.atr,
-        1e-12
-      ) <= 2.0;
-
-    const longExhausted =
-      a15.rsi > 72 ||
-      (
-        a15.close >
-          a15.ema20 +
-          a15.atr * 2.0
-      );
-
-    const shortExhausted =
-      a15.rsi < 28 ||
-      (
-        a15.close <
-          a15.ema20 -
-          a15.atr * 2.0
-      );
-
-    let signal = "NONE";
     let score = 0;
+
     let reason =
       "No high-quality setup";
-    let strategy = "WAIT";
+
+    let strategy =
+      "WAIT";
 
     if (
-      longScore >= minScore &&
+      notChasing &&
+      longScore >=
+        minScore &&
       longStructure &&
       longMomentum &&
-      !longExhausted &&
-      notChasing
+      !longExhausted
     ) {
-      signal = "BUY";
-      score = longScore;
+      signal =
+        "BUY";
+
+      score =
+        longScore;
 
       if (
         pullbackLong ||
@@ -706,14 +1147,18 @@ async function runScan(env) {
           "Bullish trend + confirmed breakout structure";
       }
     } else if (
-      shortScore >= minScore &&
+      notChasing &&
+      shortScore >=
+        minScore &&
       shortStructure &&
       shortMomentum &&
-      !shortExhausted &&
-      notChasing
+      !shortExhausted
     ) {
-      signal = "SELL";
-      score = shortScore;
+      signal =
+        "SELL";
+
+      score =
+        shortScore;
 
       if (
         pullbackShort ||
@@ -733,20 +1178,24 @@ async function runScan(env) {
       }
     } else {
       if (
-        longScore >= minScore &&
+        longScore >=
+          minScore &&
         longExhausted
       ) {
         reason =
           "Bullish but late/extended — waiting for pullback";
       } else if (
-        shortScore >= minScore &&
+        shortScore >=
+          minScore &&
         shortExhausted
       ) {
         reason =
           "Bearish but late/extended — waiting for pullback";
       } else if (
-        longScore >= minScore ||
-        shortScore >= minScore
+        longScore >=
+          minScore ||
+        shortScore >=
+          minScore
       ) {
         reason =
           "Indicators align but structure/entry timing is incomplete";
@@ -756,13 +1205,13 @@ async function runScan(env) {
         reason =
           "Entry rejected because price is extended";
       }
-    }    const entry = a15.close;
+    }
+
+    const entry =
+      price;
 
     const risk =
-      Math.max(
-        a15.atr * 1.5,
-        a15.close * 0.002
-      );
+      atr * 1.5;
 
     const sl =
       signal === "BUY"
@@ -780,20 +1229,35 @@ async function runScan(env) {
 
     const tp2 =
       signal === "BUY"
-        ? entry + risk * 2
+        ? entry +
+          risk * 2
         : signal === "SELL"
-          ? entry - risk * 2
+          ? entry -
+            risk * 2
           : null;
 
     const tp3 =
       signal === "BUY"
-        ? entry + risk * 3
+        ? entry +
+          risk * 3
         : signal === "SELL"
-          ? entry - risk * 3
+          ? entry -
+            risk * 3
           : null;
 
     return {
       ...item,
+
+      symbol,
+
+      label:
+        item.label,
+
+      category:
+        item.category,
+
+      price,
+
       signal,
 
       score:
@@ -807,291 +1271,375 @@ async function runScan(env) {
               ),
 
       longScore,
+
       shortScore,
 
-      strategy,
-      reason,
-
       entry,
+
       sl,
+
       tp1,
+
       tp2,
+
       tp3,
 
-      rsi: a15.rsi,
-      htfRsi: a1h.rsi,
+      rsi15:
+        round(
+          r15,
+          2
+        ),
 
-      candleTime:
-        a15.time
+      rsi1h:
+        round(
+          r1,
+          2
+        ),
+
+      atr:
+        round(
+          atr,
+          8
+        ),
+
+      ema20:
+        round(
+          e20,
+          8
+        ),
+
+      ema50:
+        round(
+          e50,
+          8
+        ),
+
+      ema200:
+        round(
+          e200,
+          8
+        ),
+
+      distanceAtr:
+        round(
+          distAtr,
+          2
+        ),
+
+      bodyPct:
+        round(
+          bodyPct,
+          2
+        ),
+
+      volumeOk,
+
+      pullbackLong,
+
+      pullbackShort,
+
+      reclaimLong,
+
+      reclaimShort,
+
+      breakoutLong,
+
+      breakoutShort,
+
+      strategy,
+
+      reason,
+
+      timestamp:
+        new Date(
+          last.time ||
+          Date.now()
+        ).toISOString()
     };
 
   } catch (e) {
+
+    console.error(
+      `SCAN ERROR ${symbol}:`,
+      e?.message || e
+    );
+
     return {
       ...item,
-      signal: "NONE",
+      signal:
+        "NONE",
       score: 0,
       reason:
-        `Scan error: ${
+        `Scanner error: ${String(
           e?.message || e
-        }`
+        )}`
     };
   }
-}
-
-async function getKlines(
+}async function getKlines(
   symbol,
   interval,
-  limit
+  limit = 220
 ) {
   const url =
-    `${MEXC}/api/v1/contract/kline/` +
-    `${encodeURIComponent(symbol)}` +
-    `?interval=${interval}&limit=${limit}`;
+    `${MEXC}/api/v1/contract/kline/${encodeURIComponent(symbol)}` +
+    `?interval=${interval}` +
+    `&limit=${limit}`;
 
-  const response =
-    await fetch(url);
+  const res =
+    await fetch(
+      url,
+      {
+        method: "GET",
+        headers: {
+          "accept":
+            "application/json"
+        }
+      }
+    );
 
-  if (!response.ok) {
+  if (!res.ok) {
     throw new Error(
-      `Kline ${symbol} ${interval} HTTP ${response.status}`
+      `MEXC ${symbol} ${interval}: HTTP ${res.status}`
     );
   }
 
-  const json =
-    await response.json();
-
   const data =
-    json?.data;
+    await res.json();
 
   if (
     !data ||
-    !data.time ||
-    !data.time.length
+    data.success === false
   ) {
     throw new Error(
-      `No kline data for ${symbol} ${interval}`
+      `MEXC ${symbol} ${interval}: invalid response`
     );
   }
 
-  const candles = [];
+  const d =
+    data.data;
 
-  for (
-    let i = 0;
-    i < data.time.length;
-    i++
-  ) {
-    candles.push({
-      time:
-        Number(data.time[i]),
-
-      open:
-        Number(data.open[i]),
-
-      close:
-        Number(data.close[i]),
-
-      high:
-        Number(data.high[i]),
-
-      low:
-        Number(data.low[i]),
-
-      volume:
-        Number(data.vol[i])
-    });
+  if (!d) {
+    throw new Error(
+      `MEXC ${symbol} ${interval}: no data`
+    );
   }
 
-  // Remove the currently forming candle.
-  return candles.slice(0, -1);
-}
-
-function analyze(candles) {
-  const closes =
-    candles.map(
-      x => x.close
-    );
-
-  const highs =
-    candles.map(
-      x => x.high
-    );
-
-  const lows =
-    candles.map(
-      x => x.low
-    );
-
-  const volumes =
-    candles.map(
-      x => x.volume
-    );
-
-  const ema20 =
-    ema(
-      closes,
-      20
-    ).at(-1);
-
-  const ema50 =
-    ema(
-      closes,
-      50
-    ).at(-1);
-
-  const ema200 =
-    ema(
-      closes,
-      200
-    ).at(-1);
-
-  const rsiValue =
-    rsi(
-      closes,
-      14
-    ).at(-1);
-
-  const mac =
-    macd(
-      closes,
-      12,
-      26,
-      9
-    );
-
-  const atrValue =
-    atr(
-      candles,
-      14
-    );
-
-  const volumeSma =
-    sma(
-      volumes,
-      20
-    );
-
-  const last =
-    candles.at(-1);
-
-  const previousHigh =
-    Math.max(
-      ...highs.slice(
-        -11,
-        -1
-      )
-    );
-
-  const previousLow =
-    Math.min(
-      ...lows.slice(
-        -11,
-        -1
-      )
-    );
-
-  const breakUp =
-    last.close >
-    previousHigh;
-
-  const breakDown =
-    last.close <
-    previousLow;
-
-  const reclaimUp =
-    last.low <= ema20 &&
-    last.close > ema20;
-
-  const reclaimDown =
-    last.high >= ema20 &&
-    last.close < ema20;
-
-  return {
-    ...last,
-
-    ema20,
-    ema50,
-    ema200,
-
-    rsi:
-      rsiValue,
-
-    macd:
-      mac.line,
-
-    macdSignal:
-      mac.signal,
-
-    hist:
-      mac.hist,
-
-    atr:
-      atrValue,
-
-    volumeSma,
-
-    breakUp,
-    breakDown,
-
-    reclaimUp,
-    reclaimDown
-  };
-}
-
-function sma(values, period) {
+  /*
+   * MEXC can return the kline arrays in either
+   * object form or array form depending on endpoint
+   * version.
+   */
   if (
-    !values.length
+    Array.isArray(d)
   ) {
-    return 0;
+    return d.map(
+      row => ({
+        time:
+          Number(
+            row[0]
+          ) * 1000,
+
+        open:
+          Number(
+            row[1]
+          ),
+
+        high:
+          Number(
+            row[2]
+          ),
+
+        low:
+          Number(
+            row[3]
+          ),
+
+        close:
+          Number(
+            row[4]
+          ),
+
+        volume:
+          Number(
+            row[5]
+          )
+      })
+    );
   }
 
   if (
-    values.length < period
+    d.time &&
+    d.open &&
+    d.high &&
+    d.low &&
+    d.close &&
+    d.vol
   ) {
-    return values.at(-1) || 0;
+    const n =
+      Math.min(
+        d.time.length,
+        d.open.length,
+        d.high.length,
+        d.low.length,
+        d.close.length,
+        d.vol.length
+      );
+
+    const rows = [];
+
+    for (
+      let i = 0;
+      i < n;
+      i++
+    ) {
+      rows.push({
+        time:
+          Number(
+            d.time[i]
+          ) * 1000,
+
+        open:
+          Number(
+            d.open[i]
+          ),
+
+        high:
+          Number(
+            d.high[i]
+          ),
+
+        low:
+          Number(
+            d.low[i]
+          ),
+
+        close:
+          Number(
+            d.close[i]
+          ),
+
+        volume:
+          Number(
+            d.vol[i]
+          )
+      });
+    }
+
+    return rows;
   }
+
+  throw new Error(
+    `MEXC ${symbol} ${interval}: unsupported kline format`
+  );
+}
+
+function normalizeCandles(
+  candles
+) {
+  return candles
+    .map(
+      c => ({
+        time:
+          Number(
+            c.time ??
+            c.timestamp ??
+            c.ts ??
+            0
+          ),
+
+        open:
+          Number(
+            c.open
+          ),
+
+        high:
+          Number(
+            c.high
+          ),
+
+        low:
+          Number(
+            c.low
+          ),
+
+        close:
+          Number(
+            c.close
+          ),
+
+        volume:
+          Number(
+            c.volume ??
+            c.vol ??
+            0
+          )
+      })
+    )
+    .filter(
+      c =>
+        Number.isFinite(
+          c.open
+        ) &&
+        Number.isFinite(
+          c.high
+        ) &&
+        Number.isFinite(
+          c.low
+        ) &&
+        Number.isFinite(
+          c.close
+        )
+    )
+    .sort(
+      (
+        a,
+        b
+      ) =>
+        a.time -
+        b.time
+    );
+}
+
+function ema(
+  values,
+  period
+) {
+  if (
+    !values ||
+    values.length <
+      period
+  ) {
+    return [];
+  }
+
+  const out =
+    new Array(
+      values.length
+    ).fill(
+      NaN
+    );
 
   let sum = 0;
 
   for (
-    let i =
-      values.length - period;
-    i < values.length;
+    let i = 0;
+    i < period;
     i++
   ) {
     sum +=
-      Number(values[i]) || 0;
+      Number(
+        values[i]
+      );
   }
 
-  return sum / period;
-}
+  let prev =
+    sum / period;
 
-function ema(values, period) {
-  if (
-    values.length < period
-  ) {
-    return values.map(
-      () => NaN
-    );
-  }
+  out[
+    period - 1
+  ] = prev;
 
-  const result =
-    Array(
-      values.length
-    ).fill(NaN);
-
-  let value =
-    values
-      .slice(0, period)
-      .reduce(
-        (sum, x) =>
-          sum + Number(x),
-        0
-      ) / period;
-
-  result[period - 1] =
-    value;
-
-  const multiplier =
+  const k =
     2 /
     (period + 1);
 
@@ -1100,120 +1648,285 @@ function ema(values, period) {
     i < values.length;
     i++
   ) {
-    value =
-      (
-        Number(values[i]) -
-        value
-      ) *
-        multiplier +
-      value;
+    prev =
+      Number(
+        values[i]
+      ) * k +
+      prev *
+        (1 - k);
 
-    result[i] =
-      value;
+    out[i] =
+      prev;
   }
 
-  return result;
-}function rsi(values, period) {
-  const result =
-    Array(values.length).fill(NaN);
+  return out;
+}
 
+function SMA(
+  values,
+  period
+) {
   if (
-    values.length <= period
+    !values ||
+    values.length <
+      period
   ) {
-    return result;
+    return NaN;
   }
 
-  let gain = 0;
-  let loss = 0;
+  let sum = 0;
+
+  for (
+    let i =
+      values.length -
+      period;
+    i <
+      values.length;
+    i++
+  ) {
+    sum +=
+      Number(
+        values[i]
+      );
+  }
+
+  return (
+    sum / period
+  );
+}
+
+function RSI(
+  values,
+  period = 14
+) {
+  if (
+    !values ||
+    values.length <=
+      period
+  ) {
+    return [];
+  }
+
+  const out =
+    new Array(
+      values.length
+    ).fill(
+      NaN
+    );
+
+  let gains = 0;
+  let losses = 0;
 
   for (
     let i = 1;
     i <= period;
     i++
   ) {
-    const change =
-      values[i] -
-      values[i - 1];
+    const diff =
+      Number(
+        values[i]
+      ) -
+      Number(
+        values[i - 1]
+      );
 
-    if (change >= 0) {
-      gain += change;
+    if (
+      diff >= 0
+    ) {
+      gains +=
+        diff;
     } else {
-      loss -= change;
+      losses +=
+        Math.abs(
+          diff
+        );
     }
   }
 
-  gain /= period;
-  loss /= period;
+  let avgGain =
+    gains / period;
 
-  result[period] =
-    loss === 0
+  let avgLoss =
+    losses / period;
+
+  out[
+    period
+  ] =
+    avgLoss === 0
       ? 100
       : 100 -
-        (
-          100 /
-          (
-            1 +
-            gain / loss
-          )
-        );
+        100 /
+          (1 +
+            avgGain /
+              avgLoss);
 
   for (
-    let i = period + 1;
-    i < values.length;
+    let i =
+      period + 1;
+    i <
+      values.length;
     i++
   ) {
-    const change =
-      values[i] -
-      values[i - 1];
-
-    const currentGain =
-      Math.max(
-        change,
-        0
+    const diff =
+      Number(
+        values[i]
+      ) -
+      Number(
+        values[i - 1]
       );
 
-    const currentLoss =
-      Math.max(
-        -change,
-        0
-      );
+    const gain =
+      diff > 0
+        ? diff
+        : 0;
 
-    gain =
+    const loss =
+      diff < 0
+        ? Math.abs(
+            diff
+          )
+        : 0;
+
+    avgGain =
       (
-        gain *
+        avgGain *
           (period - 1) +
-        currentGain
-      ) / period;
+        gain
+      ) /
+      period;
 
-    loss =
+    avgLoss =
       (
-        loss *
+        avgLoss *
           (period - 1) +
-        currentLoss
-      ) / period;
+        loss
+      ) /
+      period;
 
-    result[i] =
-      loss === 0
+    out[i] =
+      avgLoss === 0
         ? 100
         : 100 -
-          (
-            100 /
-            (
-              1 +
-              gain / loss
-            )
-          );
+          100 /
+            (1 +
+              avgGain /
+                avgLoss);
   }
 
-  return result;
+  return out;
 }
 
-function macd(
-  values,
-  fastPeriod,
-  slowPeriod,
-  signalPeriod
+function ATR(
+  candles,
+  period = 14
 ) {
+  if (
+    !candles ||
+    candles.length <=
+      period
+  ) {
+    return [];
+  }
+
+  const tr =
+    new Array(
+      candles.length
+    ).fill(
+      NaN
+    );
+
+  for (
+    let i = 1;
+    i <
+      candles.length;
+    i++
+  ) {
+    const h =
+      candles[i].high;
+
+    const l =
+      candles[i].low;
+
+    const pc =
+      candles[
+        i - 1
+      ].close;
+
+    tr[i] =
+      Math.max(
+        h - l,
+        Math.abs(
+          h - pc
+        ),
+        Math.abs(
+          l - pc
+        )
+      );
+  }
+
+  const out =
+    new Array(
+      candles.length
+    ).fill(
+      NaN
+    );
+
+  let sum = 0;
+
+  for (
+    let i = 1;
+    i <= period;
+    i++
+  ) {
+    sum +=
+      tr[i];
+  }
+
+  let prev =
+    sum / period;
+
+  out[
+    period
+  ] =
+    prev;
+
+  for (
+    let i =
+      period + 1;
+    i <
+      candles.length;
+    i++
+  ) {
+    prev =
+      (
+        prev *
+          (period - 1) +
+        tr[i]
+      ) /
+      period;
+
+    out[i] =
+      prev;
+  }
+
+  return out;
+}
+
+function MACD(
+  values,
+  fastPeriod = 12,
+  slowPeriod = 26,
+  signalPeriod = 9
+) {
+  if (
+    !values ||
+    values.length <
+      slowPeriod +
+        signalPeriod
+  ) {
+    return [];
+  }
+
   const fast =
     ema(
       values,
@@ -1227,122 +1940,106 @@ function macd(
     );
 
   const line =
-    values.map(
-      (_, i) => {
-        if (
-          !Number.isFinite(
-            fast[i]
-          ) ||
-          !Number.isFinite(
-            slow[i]
-          )
-        ) {
-          return NaN;
-        }
-
-        return (
-          fast[i] -
-          slow[i]
-        );
-      }
+    new Array(
+      values.length
+    ).fill(
+      NaN
     );
 
-  const cleanLine =
+  for (
+    let i =
+      slowPeriod - 1;
+    i <
+      values.length;
+    i++
+  ) {
+    if (
+      Number.isFinite(
+        fast[i]
+      ) &&
+      Number.isFinite(
+        slow[i]
+      )
+    ) {
+      line[i] =
+        fast[i] -
+        slow[i];
+    }
+  }
+
+  const clean =
     line.map(
-      value =>
+      x =>
         Number.isFinite(
-          value
+          x
         )
-          ? value
+          ? x
           : 0
     );
 
-  const signalValues =
+  const sig =
     ema(
-      cleanLine,
+      clean,
       signalPeriod
     );
 
-  const currentLine =
-    line.at(-1);
+  return values.map(
+    (
+      _,
+      i
+    ) => ({
+      macd:
+        line[i],
 
-  const currentSignal =
-    signalValues.at(-1);
+      signal:
+        sig[i],
 
-  return {
-    line:
-      currentLine,
-
-    signal:
-      currentSignal,
-
-    hist:
-      currentLine -
-      currentSignal
-  };
+      hist:
+        Number.isFinite(
+          line[i]
+        ) &&
+        Number.isFinite(
+          sig[i]
+        )
+          ? line[i] -
+            sig[i]
+          : NaN
+    })
+  );
 }
 
-function atr(
-  candles,
-  period
+function round(
+  value,
+  decimals = 4
 ) {
   if (
-    candles.length <
-    period + 1
+    !Number.isFinite(
+      Number(value)
+    )
   ) {
-    return 0;
+    return null;
   }
 
-  const trueRanges = [];
+  const p =
+    10 ** decimals;
 
-  for (
-    let i = 1;
-    i < candles.length;
-    i++
-  ) {
-    const current =
-      candles[i];
-
-    const previous =
-      candles[i - 1];
-
-    const tr =
-      Math.max(
-        current.high -
-          current.low,
-
-        Math.abs(
-          current.high -
-            previous.close
-        ),
-
-        Math.abs(
-          current.low -
-            previous.close
-        )
-      );
-
-    trueRanges.push(
-      tr
-    );
-  }
-
-  return sma(
-    trueRanges,
-    period
+  return (
+    Math.round(
+      Number(value) *
+        p
+    ) / p
   );
 }
 
 async function sendNtfy(
   env,
-  text
+  message
 ) {
-  const topic =
-    env.NTFY_TOPIC;
-
-  if (!topic) {
+  if (
+    !env.NTFY_TOPIC
+  ) {
     console.error(
-      "NTFY_TOPIC is not configured"
+      "NTFY_TOPIC secret missing"
     );
 
     return false;
@@ -1351,46 +2048,55 @@ async function sendNtfy(
   try {
     const response =
       await fetch(
-        `https://ntfy.sh/${encodeURIComponent(topic)}`,
+        `https://ntfy.sh/${encodeURIComponent(
+          env.NTFY_TOPIC
+        )}`,
         {
-          method: "POST",
+          method:
+            "POST",
 
           headers: {
-            "content-type":
+            "Content-Type":
               "text/plain; charset=utf-8",
 
             "Title":
               "Mobile Signal Bot V2",
 
             "Priority":
-              "high",
+              "default",
 
             "Tags":
               "chart_with_upwards_trend"
           },
 
-          body: text
+          body:
+            String(
+              message
+            )
         }
       );
 
-    if (!response.ok) {
-  const errorText =
-    await response.text();
+    if (
+      !response.ok
+    ) {
+      const body =
+        await response.text();
 
-  console.error(
-    `NTFY ERROR HTTP ${response.status}:`,
-    errorText.slice(0, 500)
-  );
+      console.error(
+        "NTFY failed:",
+        response.status,
+        body
+      );
 
-  return false;
-}
+      return false;
     }
 
     return true;
 
   } catch (e) {
+
     console.error(
-      "ntfy request failed:",
+      "NTFY exception:",
       e?.message || e
     );
 
@@ -1398,87 +2104,396 @@ async function sendNtfy(
   }
 }
 
-function formatAlert(s) {
-  const formatNumber =
-    value =>
-      value == null
-        ? "—"
-        : Number(value)
-            .toPrecision(8);
+function formatAlert(
+  s
+) {
+  const side =
+    s.signal ===
+    "BUY"
+      ? "🟢 LONG"
+      : "🔴 SHORT";
+
+  const strategy =
+    s.strategy ||
+    "SETUP";
 
   return (
-    `${
-      s.signal === "BUY"
-        ? "🟢"
-        : "🔴"
-    } ` +
-    `${s.signal} — ${s.label}\n` +
+    `${side} — ${s.label}\n\n` +
 
-    `15m + 1H confirmed\n` +
+    `⭐ Score: ${s.score}/10\n` +
 
-    `Score: ${
-      s.score
-    }/10\n` +
+    `📊 Strategy: ${strategy}\n` +
 
-    `Strategy: ${
-      s.strategy || "WAIT"
-    }\n\n` +
+    `💰 Entry: ${formatPrice(
+      s.entry
+    )}\n` +
 
-    `Entry: ${
-      formatNumber(
-        s.entry
-      )
-    }\n` +
+    `🛑 SL: ${formatPrice(
+      s.sl
+    )}\n` +
 
-    `SL: ${
-      formatNumber(
-        s.sl
-      )
-    }\n` +
+    `🎯 TP1: ${formatPrice(
+      s.tp1
+    )}\n` +
 
-    `TP1: ${
-      formatNumber(
-        s.tp1
-      )
-    }\n` +
+    `🎯 TP2: ${formatPrice(
+      s.tp2
+    )}\n` +
 
-    `TP2: ${
-      formatNumber(
-        s.tp2
-      )
-    }\n` +
+    `🎯 TP3: ${formatPrice(
+      s.tp3
+    )}\n\n` +
 
-    `TP3: ${
-      formatNumber(
-        s.tp3
-      )
-    }\n\n` +
+    `RSI 15m: ${s.rsi15}\n` +
 
-    `15m RSI: ${
-      s.rsi == null
-        ? "—"
-        : s.rsi.toFixed(1)
-    }\n` +
+    `RSI 1H: ${s.rsi1h}\n` +
 
-    `1H RSI: ${
-      s.htfRsi == null
-        ? "—"
-        : s.htfRsi.toFixed(1)
-    }\n\n` +
+    `ATR: ${s.atr}\n` +
 
-    `Reason: ${
-      s.reason ||
-      "No additional reason"
-    }`
+    `📌 ${s.reason}`
   );
 }
 
-function sleep(ms) {
-  return new Promise(
-    resolve =>
-      setTimeout(
-        resolve,
-        ms
-      )
+function formatPrice(
+  value
+) {
+  if (
+    value ===
+      null ||
+    value ===
+      undefined ||
+    !Number.isFinite(
+      Number(value)
+    )
+  ) {
+    return "N/A";
+  }
+
+  const n =
+    Number(value);
+
+  if (
+    n >= 1000
+  ) {
+    return n.toFixed(
+      2
+    );
+  }
+
+  if (
+    n >= 1
+  ) {
+    return n.toFixed(
+      4
+    );
+  }
+
+  return n.toFixed(
+    6
   );
 }
+
+async function getStatus(
+  env
+) {
+  let lastHeartbeat =
+    null;
+
+  let cursor =
+    null;
+
+  if (
+    env.SIGNAL_STATE
+  ) {
+    try {
+      lastHeartbeat =
+        await env.SIGNAL_STATE.get(
+          HEARTBEAT_KEY
+        );
+
+      cursor =
+        await env.SIGNAL_STATE.get(
+          "scan:cursor"
+        );
+
+    } catch (e) {
+      console.error(
+        "KV status warning:",
+        e?.message || e
+      );
+    }
+  }
+
+  return {
+    ok: true,
+
+    worker:
+      "Mobile Signal Bot V2",
+
+    heartbeat:
+      lastHeartbeat,
+
+    rotationCursor:
+      cursor,
+
+    heartbeatInterval:
+      "30 minutes",
+
+    timestamp:
+      new Date().toISOString()
+  };
+}function isFiniteNumber(
+  value
+) {
+  return Number.isFinite(
+    Number(value)
+  );
+}
+
+function safeNumber(
+  value,
+  fallback = 0
+) {
+  const n =
+    Number(value);
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
+}
+
+function lastValue(
+  values
+) {
+  if (
+    !Array.isArray(values) ||
+    !values.length
+  ) {
+    return null;
+  }
+
+  return values[
+    values.length - 1
+  ];
+}
+
+function clamp(
+  value,
+  min,
+  max
+) {
+  return Math.min(
+    max,
+    Math.max(
+      min,
+      value
+    )
+  );
+}
+
+/*
+ * Small diagnostic helper.
+ * It does not affect signal scoring.
+ */
+function diagnostic(
+  label,
+  value
+) {
+  try {
+    console.log(
+      `[V2] ${label}:`,
+      value
+    );
+  } catch (_) {}
+}
+
+/*
+ * Keep the worker alive only through the
+ * scheduled event / request lifecycle.
+ *
+ * No permanent loop is used here.
+ */
+function heartbeatDescription() {
+  return {
+    interval:
+      HEARTBEAT_MS,
+
+    minutes:
+      HEARTBEAT_MS /
+      60000,
+
+    message:
+      "Mobile Signal Bot V2 is ALIVE"
+  };
+}
+
+/*
+ * Final safety wrapper for JSON output.
+ */
+function jsonResponse(
+  payload,
+  status = 200
+) {
+  return new Response(
+    JSON.stringify(
+      payload,
+      null,
+      2
+    ),
+    {
+      status,
+
+      headers: {
+        "content-type":
+          "application/json; charset=utf-8",
+
+        "cache-control":
+          "no-store"
+      }
+    }
+  );
+}
+
+/*
+ * The functions below intentionally do not
+ * create another scanning loop.
+ *
+ * Cloudflare Cron calls scheduled(), which
+ * calls runScan(). The heartbeat is persisted
+ * in KV, so multiple invocations cannot spam
+ * ntfy more than once per 30 minutes.
+ */
+
+function getHeartbeatInfo(
+  timestamp
+) {
+  const ts =
+    Number(timestamp);
+
+  if (
+    !Number.isFinite(ts) ||
+    ts <= 0
+  ) {
+    return {
+      valid: false,
+      ageMs: null
+    };
+  }
+
+  return {
+    valid: true,
+
+    ageMs:
+      Math.max(
+        0,
+        Date.now() -
+          ts
+      ),
+
+    ageMinutes:
+      Math.max(
+        0,
+        (
+          Date.now() -
+          ts
+        ) / 60000
+      )
+  };
+}
+
+/*
+ * Optional diagnostic endpoint.
+ *
+ * /heartbeat
+ *
+ * This does not send a notification.
+ * It only reports the stored heartbeat
+ * timestamp and configured interval.
+ */
+async function heartbeatStatus(
+  env
+) {
+  let stored =
+    null;
+
+  if (
+    env.SIGNAL_STATE
+  ) {
+    try {
+      stored =
+        await env.SIGNAL_STATE.get(
+          HEARTBEAT_KEY
+        );
+    } catch (e) {
+      console.error(
+        "KV heartbeat status warning:",
+        e?.message || e
+      );
+    }
+  }
+
+  return {
+    ok: true,
+
+    heartbeat:
+      heartbeatDescription(),
+
+    lastHeartbeat:
+      stored,
+
+    info:
+      getHeartbeatInfo(
+        stored
+      ),
+
+    timestamp:
+      new Date().toISOString()
+  };
+}
+
+/*
+ * Replace the default fetch handler only
+ * for the diagnostic heartbeat route.
+ *
+ * This wrapper is intentionally kept separate
+ * so the scanner itself remains unchanged.
+ */
+const originalFetch =
+  globalThis.__MOBILE_SIGNAL_BOT_V2_FETCH__;
+
+if (
+  !originalFetch
+) {
+  globalThis.__MOBILE_SIGNAL_BOT_V2_FETCH__ =
+    true;
+}
+
+/*
+ * IMPORTANT:
+ * The worker's default export is declared in
+ * Part 1. The /heartbeat endpoint is therefore
+ * handled by adding it inside that fetch handler
+ * if you want to inspect heartbeat status.
+ *
+ * The normal production flow requires no
+ * permanent timer and no setInterval().
+ */
+
+/*
+ * Final constants sanity check.
+ */
+diagnostic(
+  "Heartbeat interval minutes",
+  HEARTBEAT_MS /
+    60000
+);
+
+diagnostic(
+  "Scan batch size",
+  SCAN_BATCH_SIZE
+);
+
+diagnostic(
+  "Default minimum score",
+  DEFAULT_MIN_SCORE
+);
